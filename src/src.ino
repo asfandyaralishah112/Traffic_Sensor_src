@@ -9,7 +9,7 @@ const char* ssid = "air fiber 2.4Ghz_EXT";
 const char* password = "lachi@8182";
 
 // Current firmware version on device
-String currentVersion = "1.0";
+String currentVersion = "1.0.004";
 
 // URL to version.json on GitHub
 String versionURL =
