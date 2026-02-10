@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.007";
+String currentVersion = "1.0.008";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -130,7 +130,12 @@ void updateStatusLED() {
       lastBlink = millis();
     }
   } else if (currentState == ERROR_STATE) {
-    setLED(true, false, false); // Red ON
+    // Heartbeat: ON(100) -> OFF(100) -> ON(100) -> OFF(700)
+    unsigned long m = millis() % 1000;
+    if (m < 100) setLED(true, false, false);      // Pulse 1
+    else if (m < 200) setLED(false, false, false); // Gap
+    else if (m < 300) setLED(true, false, false);  // Pulse 2
+    else setLED(false, false, false);              // Long Gap
   } else if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
     setLED(false, true, false); // Green ON
   } else if (WiFi.status() == WL_CONNECTED) {
