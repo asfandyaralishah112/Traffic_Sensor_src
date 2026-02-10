@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.006";
+String currentVersion = "1.0.007";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -34,9 +34,9 @@ const char* mqtt_topic = "door/counter/events";
 #define PIN_RST 8
 #define PIN_CALIBRATION 9
 
-#define LED_RED   3
-#define LED_GREEN 2
-#define LED_BLUE  1
+#define LED_RED   23
+#define LED_GREEN 22
+#define LED_BLUE  21
 
 // ================= SYSTEM STATES =================
 enum SystemState {
@@ -45,6 +45,7 @@ enum SystemState {
   MQTT_CONNECT,
   NORMAL_OPERATION,
   CALIBRATION_MODE,
+  OTA_UPDATE,
   ERROR_STATE
 };
 
@@ -81,6 +82,7 @@ enum FlowState {
 };
 
 FlowState flowState = FLOW_IDLE;
+volatile bool otaRequested = false;
 unsigned long stateStartTime = 0;
 int clearFrames = 0;
 #define MIN_STATE_FRAMES 2
@@ -169,6 +171,7 @@ void loadCalibration() {
 // =====================================================
 void runCalibration() {
   Serial.println("Starting Calibration...");
+  publishStatus("calibration_started");
   currentState = CALIBRATION_MODE;
   
   // Step 1: Stabilization (10 seconds)
@@ -221,8 +224,6 @@ void runCalibration() {
   }
 
   // Step 3: Floor Distance Measurement (15 seconds)
-  // Already partially done in Step 2 for simplicity, but let's refine if needed.
-  // The spec says Step 3 is 15 seconds.
   Serial.println("Step 3: Floor Distance Measurement...");
   start = millis();
   while (millis() - start < 15000) {
@@ -251,7 +252,9 @@ void runCalibration() {
 
   saveCalibration();
   Serial.println("Calibration Complete!");
+  publishStatus("calibration_completed");
   currentState = NORMAL_OPERATION;
+  publishStatus("returning_to_normal");
 }
 
 void checkCalibrationTrigger() {
@@ -403,8 +406,79 @@ void processFlow() {
 }
 
 // =====================================================
+// ADAPTIVE CALIBRATION
+// =====================================================
+void updateAdaptiveBaseline() {
+  if (currentState != NORMAL_OPERATION) return;
+  if (flowState != FLOW_IDLE) return;
+  if (A_active || M_active || B_active) return;
+
+  const float alpha = 0.003;
+
+  for (int i = 0; i < 64; i++) {
+    if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
+      if ((measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) &&
+          measurementData.distance_mm[i] > 0) {
+        
+        uint16_t currentDist = measurementData.distance_mm[i];
+        uint16_t baselineDist = calData.floor_distance[i];
+
+        // Rule 6: Safety Clamp
+        if (abs((int)currentDist - (int)baselineDist) <= 300) {
+          // Rule 4: Exponential Moving Average
+          float newFloor = ((1.0f - alpha) * (float)baselineDist) + (alpha * (float)currentDist);
+          calData.floor_distance[i] = (uint16_t)newFloor;
+          
+          // Rule 5: Threshold update
+          calData.threshold[i] = calData.floor_distance[i] / 2;
+        }
+      }
+    }
+  }
+}
+
+// =====================================================
 // MQTT FUNCTIONS
 // =====================================================
+void publishStatus(String status) {
+  if (!mqttClient.connected()) return;
+  
+  String topic = String("door/counter/status/") + DEVICE_UID;
+  StaticJsonDocument<128> doc;
+  doc["device_uid"] = DEVICE_UID;
+  doc["status"] = status;
+  
+  char buffer[128];
+  serializeJson(doc, buffer);
+  mqttClient.publish(topic.c_str(), buffer);
+  Serial.println("Status Published: " + status);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, payload, length);
+  if (error) {
+    Serial.println("JSON parse failed");
+    return;
+  }
+
+  String command = doc["command"].as<String>();
+  if (command == "calibrate") {
+    if (currentState == CALIBRATION_MODE) {
+      Serial.println("Already in calibration mode, ignoring.");
+      return;
+    }
+    runCalibration();
+  } else if (command == "update") {
+    if (currentState == CALIBRATION_MODE || currentState == OTA_UPDATE) {
+      Serial.println("Busy, ignoring update command.");
+      return;
+    }
+    otaRequested = true;
+    Serial.println("OTA Update Requested via MQTT");
+  }
+}
+
 void mqttReconnect() {
   if (WiFi.status() != WL_CONNECTED) return;
   
@@ -414,6 +488,12 @@ void mqttReconnect() {
     Serial.print("Attempting MQTT connection...");
     if (mqttClient.connect(DEVICE_UID, mqtt_user, mqtt_pass)) {
       Serial.println("connected");
+      
+      // Subscribe to command topic
+      String commandTopic = String("door/counter/commands/") + DEVICE_UID;
+      mqttClient.subscribe(commandTopic.c_str());
+      Serial.println("Subscribed to: " + commandTopic);
+      
       currentState = NORMAL_OPERATION;
     } else {
       Serial.print("failed, rc=");
@@ -457,7 +537,12 @@ void publishBufferedEvents() {
 // =====================================================
 void checkForOTA()
 {
+  if (currentState == OTA_UPDATE) return; 
+  SystemState previousState = currentState;
+  currentState = OTA_UPDATE;
+
   Serial.println("Checking for OTA update...");
+  publishStatus("ota_check_started");
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -475,6 +560,8 @@ void checkForOTA()
     if (deserializeJson(doc, payload))
     {
       Serial.println("JSON parse failed");
+      publishStatus("returning_to_normal");
+      currentState = previousState;
       http.end();
       return;
     }
@@ -488,6 +575,8 @@ void checkForOTA()
     if (newVersion != currentVersion)
     {
       Serial.println("New firmware detected. Updating...");
+      publishStatus("ota_update_found");
+      publishStatus("ota_downloading");
 
       WiFiClientSecure updateClient;
       updateClient.setInsecure();
@@ -495,17 +584,28 @@ void checkForOTA()
       t_httpUpdate_return ret =
         httpUpdate.update(updateClient, firmwareURL);
 
-      if (ret != HTTP_UPDATE_OK)
+      if (ret != HTTP_UPDATE_OK) {
         Serial.println("Update failed");
+        publishStatus("returning_to_normal");
+        currentState = previousState;
+      } else {
+        publishStatus("ota_completed");
+        // Device reboots
+      }
     }
     else
     {
       Serial.println("Already latest version.");
+      publishStatus("ota_no_update");
+      publishStatus("returning_to_normal");
+      currentState = previousState;
     }
   }
   else
   {
     Serial.printf("Version download failed: %d\n", httpCode);
+    publishStatus("returning_to_normal");
+    currentState = previousState;
   }
 
   http.end();
@@ -536,7 +636,9 @@ void initVL53()
   if (!myImager.begin())
   {
     Serial.println("Sensor not found");
-    while (1);
+    currentState = ERROR_STATE;
+    publishStatus("error_state_entered");
+    return;
   }
 
   myImager.setResolution(8 * 8);
@@ -586,6 +688,7 @@ void setup()
   
   // Setup MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
   
   currentState = NORMAL_OPERATION;
 }
@@ -609,11 +712,18 @@ void loop()
   updateStatusLED();
   checkCalibrationTrigger();
 
+  // Async OTA trigger
+  if (otaRequested && currentState != CALIBRATION_MODE && currentState != OTA_UPDATE) {
+    otaRequested = false;
+    checkForOTA();
+  }
+
   if (currentState != CALIBRATION_MODE) {
     if (myImager.isDataReady())
     {
       myImager.getRangingData(&measurementData);
       processFlow();
+      updateAdaptiveBaseline();
 
       frameCount++;
       if (millis() - lastPrint > 1000)
