@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.008";
+String currentVersion = "1.0.009";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -60,6 +60,7 @@ struct CalibrationData {
 
 CalibrationData calData;
 Preferences preferences;
+bool sensorInitialized = false;
 
 // ================= REGION OCCUPANCY =================
 bool A_active = false;
@@ -121,7 +122,7 @@ void setLED(bool r, bool g, bool b) {
 
 void updateStatusLED() {
   if (currentState == CALIBRATION_MODE) {
-    // Red blinking (handled in calibration loop or via timer)
+    // Red blinking
     static bool blink = false;
     static unsigned long lastBlink = 0;
     if (millis() - lastBlink > 500) {
@@ -129,13 +130,8 @@ void updateStatusLED() {
       setLED(blink, false, false);
       lastBlink = millis();
     }
-  } else if (currentState == ERROR_STATE) {
-    // Heartbeat: ON(100) -> OFF(100) -> ON(100) -> OFF(700)
-    unsigned long m = millis() % 1000;
-    if (m < 100) setLED(true, false, false);      // Pulse 1
-    else if (m < 200) setLED(false, false, false); // Gap
-    else if (m < 300) setLED(true, false, false);  // Pulse 2
-    else setLED(false, false, false);              // Long Gap
+  } else if (!sensorInitialized || currentState == ERROR_STATE) {
+    setLED(true, false, false); // Red ON
   } else if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
     setLED(false, true, false); // Green ON
   } else if (WiFi.status() == WL_CONNECTED) {
@@ -456,7 +452,30 @@ void publishStatus(String status) {
   char buffer[128];
   serializeJson(doc, buffer);
   mqttClient.publish(topic.c_str(), buffer);
+  mqttClient.loop(); // Flush status message
   Serial.println("Status Published: " + status);
+}
+
+void publishTelemetry() {
+  if (!mqttClient.connected()) return;
+  
+  static unsigned long lastTelemetry = 0;
+  if (millis() - lastTelemetry < 100) return;
+  lastTelemetry = millis();
+
+  String topic = String("door/counter/telemetry/") + DEVICE_UID;
+  StaticJsonDocument<1024> doc;
+  doc["device_uid"] = DEVICE_UID;
+  doc["state"] = (int)flowState;
+  
+  JsonArray zones = doc.createNestedArray("zones");
+  for (int i = 0; i < 64; i++) {
+    zones.add(measurementData.distance_mm[i]);
+  }
+  
+  char buffer[1024];
+  serializeJson(doc, buffer);
+  mqttClient.publish(topic.c_str(), buffer);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -595,6 +614,7 @@ void checkForOTA()
         currentState = previousState;
       } else {
         publishStatus("ota_completed");
+        publishStatus("ota_update_finished");
         // Device reboots
       }
     }
@@ -602,6 +622,7 @@ void checkForOTA()
     {
       Serial.println("Already latest version.");
       publishStatus("ota_no_update");
+      publishStatus("ota_update_finished");
       publishStatus("returning_to_normal");
       currentState = previousState;
     }
@@ -609,6 +630,7 @@ void checkForOTA()
   else
   {
     Serial.printf("Version download failed: %d\n", httpCode);
+    publishStatus("ota_update_finished");
     publishStatus("returning_to_normal");
     currentState = previousState;
   }
@@ -641,11 +663,13 @@ void initVL53()
   if (!myImager.begin())
   {
     Serial.println("Sensor not found");
+    sensorInitialized = false;
     currentState = ERROR_STATE;
     publishStatus("error_state_entered");
     return;
   }
 
+  sensorInitialized = true;
   myImager.setResolution(8 * 8);
   myImager.setRangingFrequency(15);
   myImager.startRanging();
@@ -694,6 +718,7 @@ void setup()
   // Setup MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(1024);
   
   currentState = NORMAL_OPERATION;
 }
@@ -712,6 +737,7 @@ void loop()
   } else {
     mqttClient.loop();
     publishBufferedEvents();
+    publishTelemetry();
   }
 
   updateStatusLED();
