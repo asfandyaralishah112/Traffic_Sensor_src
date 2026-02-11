@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.018";
+String currentVersion = "1.0.019";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -375,8 +375,25 @@ void processFlow() {
           clearFrames = 0;
           candidateFrames = 0;
           candidateState = FLOW_IDLE;
+          Serial.println("Flow Cleared -> IDLE");
         }
       } else {
+        if (clearFrames > 0) {
+          Serial.print("Clearing interrupted: A="); Serial.print(A_active);
+          Serial.print(" M="); Serial.print(M_active);
+          Serial.print(" B="); Serial.println(B_active);
+          
+          // Debug: which zones are active?
+          for (int i = 0; i < 64; i++) {
+            if (calData.zone_mask[i] == 0) {
+              if (measurementData.distance_mm[i] > 0 && 
+                  measurementData.distance_mm[i] < calData.threshold[i] &&
+                  (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9)) {
+                Serial.printf("Z%d: d=%d th=%d st=%d\n", i, measurementData.distance_mm[i], calData.threshold[i], measurementData.target_status[i]);
+              }
+            }
+          }
+        }
         clearFrames = 0;
       }
       return; // Skip the transition logic below for clearing
@@ -672,6 +689,11 @@ void initVL53()
   sensorInitialized = true;
   myImager.setResolution(8 * 8);
   myImager.setRangingFrequency(15);
+  
+  // Optimization for faster recovery/floor detection
+  myImager.setSharpenerPercent(0);       // Disable sharpener to avoid "smearing" artifacts
+  myImager.setIntegrationTime(20);      // 20ms integration time for stable 15Hz ranging
+  
   myImager.startRanging();
 
   Serial.println("Sensor ready");
