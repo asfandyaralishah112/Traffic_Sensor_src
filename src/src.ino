@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.013";
+String currentVersion = "1.0.014";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -737,7 +737,6 @@ void loop()
   } else {
     mqttClient.loop();
     publishBufferedEvents();
-    publishTelemetry();
   }
 
   updateStatusLED();
@@ -755,6 +754,7 @@ void loop()
       myImager.getRangingData(&measurementData);
       processFlow();
       updateAdaptiveBaseline();
+      publishTelemetry();
 
       frameCount++;
       if (millis() - lastPrint > 1000)
