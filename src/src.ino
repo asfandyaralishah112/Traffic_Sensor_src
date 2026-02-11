@@ -464,7 +464,9 @@ void publishTelemetry() {
   if (!mqttClient.connected()) return;
 
   String topic = String("door/counter/telemetry/") + DEVICE_UID;
-  StaticJsonDocument<2048> doc;
+  static StaticJsonDocument<2048> doc;
+  doc.clear();
+  
   doc["device_uid"] = DEVICE_UID;
   doc["state"] = (int)flowState;
   
@@ -473,13 +475,11 @@ void publishTelemetry() {
     zones.add(measurementData.distance_mm[i]);
   }
   
-  char buffer[2048];
+  static char buffer[2048];
   size_t n = serializeJson(doc, buffer);
-  if (n == 0) {
-    Serial.println("Telemetry JSON overflow!");
-    return;
+  if (n > 0) {
+    mqttClient.publish(topic.c_str(), buffer);
   }
-  mqttClient.publish(topic.c_str(), buffer);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -534,7 +534,7 @@ void mqttReconnect() {
 void publishBufferedEvents() {
   if (!mqttClient.connected()) return;
 
-  while (eventCount > 0) {
+  if (eventCount > 0) {
     CounterEvent ev = eventBuffer[0];
     
     StaticJsonDocument<256> doc;
@@ -555,7 +555,6 @@ void publishBufferedEvents() {
       eventCount--;
     } else {
       Serial.println("Publish failed, keeping in buffer");
-      break;
     }
   }
 }
