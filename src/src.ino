@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.024";
+String currentVersion = "1.0.025";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -492,7 +492,7 @@ void publishTelemetry() {
   doc["state"] = (int)flowState;
   
   JsonArray zones = doc.createNestedArray("zones");
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 64; i++) {
     zones.add(measurementData.distance_mm[i]);
   }
   
@@ -700,8 +700,8 @@ void initVL53()
   }
 
   sensorInitialized = true;
-  myImager.setResolution(4 * 4); // v1.0.024: Lower resolution for faster recovery
-  myImager.setRangingFrequency(15);
+  myImager.setResolution(8 * 8); // Reverted to 8x8 v1.0.025
+  myImager.setRangingFrequency(15); // Max for 8x8 is 15Hz
   
   // Optimization for faster recovery/floor detection (v1.0.022)
   myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
