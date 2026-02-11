@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.014";
+String currentVersion = "1.0.015";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -457,12 +457,6 @@ void publishStatus(String status) {
 }
 
 void publishTelemetry() {
-  if (!mqttClient.connected()) return;
-  
-  static unsigned long lastTelemetry = 0;
-  if (millis() - lastTelemetry < 100) return;
-  lastTelemetry = millis();
-
   String topic = String("door/counter/telemetry/") + DEVICE_UID;
   StaticJsonDocument<1024> doc;
   doc["device_uid"] = DEVICE_UID;
@@ -752,9 +746,9 @@ void loop()
     if (myImager.isDataReady())
     {
       myImager.getRangingData(&measurementData);
+      publishTelemetry();
       processFlow();
       updateAdaptiveBaseline();
-      publishTelemetry();
 
       frameCount++;
       if (millis() - lastPrint > 1000)
