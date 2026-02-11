@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.020";
+String currentVersion = "1.0.021";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -32,6 +32,7 @@ const char* mqtt_topic = "door/counter/events";
 const char* udp_server = "192.168.3.10";
 const int udp_port = 5005;
 WiFiUDP udpClient;
+uint32_t udpPacketsSent = 0;
 
 // ================= GPIO =================
 #define SDA_PIN 6
@@ -468,15 +469,17 @@ void publishStatus(String status) {
   if (!mqttClient.connected()) return;
   
   String topic = String("door/counter/status/") + DEVICE_UID;
-  StaticJsonDocument<128> doc;
+  StaticJsonDocument<256> doc;
   doc["device_uid"] = DEVICE_UID;
   doc["status"] = status;
+  doc["version"] = currentVersion;
+  doc["udp_sent"] = udpPacketsSent;
   
-  char buffer[128];
+  char buffer[256];
   serializeJson(doc, buffer);
   mqttClient.publish(topic.c_str(), buffer);
   mqttClient.loop(); // Flush status message
-  Serial.println("Status Published: " + status);
+  Serial.println("Status Published: " + status + " | UDP Sent: " + String(udpPacketsSent));
 }
 
 void publishTelemetry() {
@@ -498,7 +501,11 @@ void publishTelemetry() {
   
   udpClient.beginPacket(udp_server, udp_port);
   udpClient.write((const uint8_t*)buffer, len);
-  udpClient.endPacket();
+  if (udpClient.endPacket()) {
+    udpPacketsSent++;
+  } else {
+    Serial.println("UDP Packet Fail");
+  }
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -747,6 +754,10 @@ void setup()
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(1024);
+  
+  // Initialize UDP
+  udpClient.begin(udp_port);
+  Serial.printf("UDP Initialized on port %d\n", udp_port);
   
   currentState = NORMAL_OPERATION;
 }
