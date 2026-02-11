@@ -9,12 +9,15 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.016";
+String currentVersion = "1.0.017";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
 const char* DEVICE_UID = "ESP32C6_COUNTER_001";
 const char* BLE_BROADCAST_NAME = "SmartCounter_001";
+const char* JSON_UID_KEY = "u";
+const char* JSON_STATUS_KEY = "s";
+const char* JSON_ZONE_KEY = "z";
 
 // ================= WIFI =================
 const char* ssid = "EncryptedAir";
@@ -467,10 +470,10 @@ void publishTelemetry() {
   static StaticJsonDocument<2048> doc;
   doc.clear();
   
-  doc["device_uid"] = DEVICE_UID;
-  doc["state"] = (int)flowState;
+  doc["u"] = DEVICE_UID;
+  doc["s"] = (int)flowState;
   
-  JsonArray zones = doc.createNestedArray("zones");
+  JsonArray zones = doc.createNestedArray("z");
   for (int i = 0; i < 64; i++) {
     zones.add(measurementData.distance_mm[i]);
   }
@@ -721,7 +724,7 @@ void setup()
   // Setup MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(2048);
+  mqttClient.setBufferSize(4096);
   
   currentState = NORMAL_OPERATION;
 }
