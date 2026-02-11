@@ -50,9 +50,9 @@ listener_thread.start()
 fig, (ax_grid, ax_state) = plt.subplots(1, 2, figsize=(12, 5), gridspec_kw={'width_ratios': [3, 1]})
 
 # Grid visualization
-img = ax_grid.imshow(np.zeros((8, 8)), vmin=0, vmax=2500, cmap='viridis', interpolation='nearest')
+img = ax_grid.imshow(np.zeros((4, 4)), vmin=0, vmax=2500, cmap='viridis', interpolation='nearest')
 plt.colorbar(img, ax=ax_grid, label='Distance (mm)')
-ax_grid.set_title("ToF Sensor 8x8 Grid (UDP)")
+ax_grid.set_title("ToF Sensor 4x4 Grid (UDP)")
 
 # State visualization
 state_text = ax_state.text(0.5, 0.5, "IDLE", ha='center', va='center', fontsize=24, fontweight='bold')
@@ -82,8 +82,8 @@ def update(frame):
         # 1. Update Grid
         if "zones" in data:
             zones = np.array(data["zones"])
-            if len(zones) == 64:
-                grid = zones.reshape((8, 8))
+            if len(zones) == 16:
+                grid = zones.reshape((4, 4))
                 img.set_data(grid)
         
         # 2. Update State
