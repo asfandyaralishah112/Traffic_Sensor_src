@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.022";
+String currentVersion = "1.0.023";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -794,8 +794,11 @@ void loop()
     if (myImager.isDataReady())
     {
       myImager.getRangingData(&measurementData);
-      processFlow();
-      updateAdaptiveBaseline();
+      // Logic stripped for debugging v1.0.023
+      // processFlow();
+      // updateAdaptiveBaseline();
+      
+      publishTelemetry(); // Still share raw grid over UDP
 
       frameCount++;
       if (millis() - lastPrint > 1000)
