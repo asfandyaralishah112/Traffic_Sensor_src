@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <SparkFun_VL53L5CX_Library.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
@@ -9,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.019";
+String currentVersion = "1.0.020";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -26,6 +27,11 @@ const int mqtt_port = 1883;
 const char* mqtt_user = "Traffic_Sensor";
 const char* mqtt_pass = "admin";
 const char* mqtt_topic = "door/counter/events";
+
+// ================= UDP TELEMETRY =================
+const char* udp_server = "192.168.3.10";
+const int udp_port = 5005;
+WiFiUDP udpClient;
 
 // ================= GPIO =================
 #define SDA_PIN 6
@@ -474,13 +480,10 @@ void publishStatus(String status) {
 }
 
 void publishTelemetry() {
-  if (!mqttClient.connected()) return;
-  
   static unsigned long lastTelemetry = 0;
-  if (millis() - lastTelemetry < 100) return;
+  if (millis() - lastTelemetry < 50) return; // 20 FPS max for telemetry
   lastTelemetry = millis();
 
-  String topic = String("door/counter/telemetry/") + DEVICE_UID;
   StaticJsonDocument<1024> doc;
   doc["device_uid"] = DEVICE_UID;
   doc["state"] = (int)flowState;
@@ -491,8 +494,11 @@ void publishTelemetry() {
   }
   
   char buffer[1024];
-  serializeJson(doc, buffer);
-  mqttClient.publish(topic.c_str(), buffer);
+  size_t len = serializeJson(doc, buffer);
+  
+  udpClient.beginPacket(udp_server, udp_port);
+  udpClient.write((const uint8_t*)buffer, len);
+  udpClient.endPacket();
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {

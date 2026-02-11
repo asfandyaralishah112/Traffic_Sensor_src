@@ -1,4 +1,4 @@
 {
-  "version": "1.0.019",
+  "version": "1.0.020",
   "firmware": "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/src/build/esp32.esp32.esp32c6/src.ino.bin"
 }

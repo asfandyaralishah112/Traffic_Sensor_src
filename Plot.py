@@ -2,81 +2,64 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-import paho.mqtt.client as mqtt
+import socket
+import threading
 import queue
 import time
 
 # --- Configuration ---
-BROKER = "192.168.3.10"
-TOPIC = "door/counter/telemetry/ESP32C6_COUNTER_001"
-MQTT_USER = "Traffic_Sensor"
-MQTT_PASS = "admin"
+UDP_IP = "0.0.0.0" # Listen on all interfaces
+UDP_PORT = 5005
+DEVICE_ID = "ESP32C6_COUNTER_001"
 
 # --- Shared Data ---
-# We use a queue for thread-safe communication between MQTT and Matplotlib
 data_queue = queue.Queue()
 
-def on_connect(client, userdata, flags, rc, properties=None):
-    if rc == 0:
-        print(f"✅ Connected to MQTT Broker ({BROKER})")
-        client.subscribe(TOPIC)
-        print(f"📡 Subscribed to: {TOPIC}")
-    else:
-        # rc codes for MQTT v5: 135 is Not Authorized
-        print(f"❌ Failed to connect, return code {rc}")
+def udp_listener():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((UDP_IP, UDP_PORT))
+    print(f"📡 UDP Listener started on {UDP_IP}:{UDP_PORT}")
+    
+    count = 0
+    while True:
+        try:
+            data, addr = sock.recvfrom(2048) # buffer size is 2048 bytes
+            payload = data.decode()
+            json_data = json.loads(payload)
+            
+            count += 1
+            if count % 20 == 0:
+                print(f"📥 Received UDP packet #{count} from {addr}, State: {json_data.get('state')}")
 
-def on_message(client, userdata, msg):
-    try:
-        payload = msg.payload.decode()
-        data = json.loads(payload)
-        
-        # Debug: Print once every few messages to not flood console
-        if not hasattr(on_message, "count"): on_message.count = 0
-        on_message.count += 1
-        if on_message.count % 20 == 0:
-            print(f"📥 Received data #{on_message.count}, State: {data.get('state')}")
+            # Put data in queue. If queue is too full, drop old data to keep it real-time.
+            if data_queue.qsize() > 5:
+                try:
+                    data_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            data_queue.put(json_data)
+        except Exception as e:
+            print(f"⚠️ UDP Error: {e}")
+            time.sleep(1)
 
-        # Put data in queue. If queue is too full, drop old data to keep it real-time.
-        if data_queue.qsize() > 5:
-            try:
-                data_queue.get_nowait()
-            except queue.Empty:
-                pass
-        data_queue.put(data)
-    except Exception as e:
-        print(f"⚠️ Error parsing message: {e}")
-
-# --- MQTT Setup ---
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-client.on_connect = on_connect
-client.on_message = on_message
-
-# Set credentials
-if MQTT_USER and MQTT_PASS:
-    client.username_pw_set(MQTT_USER, MQTT_PASS)
-
-print(f"🔄 Connecting to broker {BROKER}...")
-try:
-    client.connect(BROKER, 1883, 60)
-    client.loop_start()  # Run MQTT in a background thread
-except Exception as e:
-    print(f"❌ MQTT Connection Error: {e}")
+# Start UDP Listener in background thread
+listener_thread = threading.Thread(target=udp_listener, daemon=True)
+listener_thread.start()
 
 # --- Visualization Setup ---
 fig, (ax_grid, ax_state) = plt.subplots(1, 2, figsize=(12, 5), gridspec_kw={'width_ratios': [3, 1]})
 
 # Grid visualization
-# Using interpolation='nearest' to keep the 8x8 squares sharp
 img = ax_grid.imshow(np.zeros((8, 8)), vmin=0, vmax=2500, cmap='viridis', interpolation='nearest')
 plt.colorbar(img, ax=ax_grid, label='Distance (mm)')
-ax_grid.set_title("ToF Sensor 8x8 Grid")
+ax_grid.set_title("ToF Sensor 8x8 Grid (UDP)")
 
 # State visualization
 state_text = ax_state.text(0.5, 0.5, "IDLE", ha='center', va='center', fontsize=24, fontweight='bold')
 ax_state.set_title("System State")
 ax_state.axis('off')
 
-# Mapping for firmware FlowState enum (from firmware.ino)
+# Mapping for firmware FlowState enum
 STATE_MAP = {
     0: "IDLE",
     1: "FLOW_A",
@@ -122,13 +105,9 @@ def update(frame):
     return []
 
 # Using FuncAnimation for smooth updates
-# Increase interval slightly to give more CPU time to MQTT thread if needed
-ani = FuncAnimation(fig, update, interval=100, blit=False, cache_frame_data=False)
+ani = FuncAnimation(fig, update, interval=33, blit=False, cache_frame_data=False) # 30 FPS update
 
 plt.tight_layout()
 plt.show()
 
-# Clean up
 print("Closing application...")
-client.loop_stop()
-client.disconnect()
