@@ -9,7 +9,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.015";
+String currentVersion = "1.0.016";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
@@ -457,8 +457,14 @@ void publishStatus(String status) {
 }
 
 void publishTelemetry() {
+  static unsigned long lastTelemetry = 0;
+  if (millis() - lastTelemetry < 100) return;
+  lastTelemetry = millis();
+
+  if (!mqttClient.connected()) return;
+
   String topic = String("door/counter/telemetry/") + DEVICE_UID;
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;
   doc["device_uid"] = DEVICE_UID;
   doc["state"] = (int)flowState;
   
@@ -467,8 +473,12 @@ void publishTelemetry() {
     zones.add(measurementData.distance_mm[i]);
   }
   
-  char buffer[1024];
-  serializeJson(doc, buffer);
+  char buffer[2048];
+  size_t n = serializeJson(doc, buffer);
+  if (n == 0) {
+    Serial.println("Telemetry JSON overflow!");
+    return;
+  }
   mqttClient.publish(topic.c_str(), buffer);
 }
 
@@ -712,7 +722,7 @@ void setup()
   // Setup MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(1024);
+  mqttClient.setBufferSize(2048);
   
   currentState = NORMAL_OPERATION;
 }
