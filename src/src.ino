@@ -9,15 +9,12 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.017";
+String currentVersion = "1.0.018";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= DEVICE ID =================
 const char* DEVICE_UID = "ESP32C6_COUNTER_001";
 const char* BLE_BROADCAST_NAME = "SmartCounter_001";
-const char* JSON_UID_KEY = "u";
-const char* JSON_STATUS_KEY = "s";
-const char* JSON_ZONE_KEY = "z";
 
 // ================= WIFI =================
 const char* ssid = "EncryptedAir";
@@ -460,29 +457,25 @@ void publishStatus(String status) {
 }
 
 void publishTelemetry() {
+  if (!mqttClient.connected()) return;
+  
   static unsigned long lastTelemetry = 0;
   if (millis() - lastTelemetry < 100) return;
   lastTelemetry = millis();
 
-  if (!mqttClient.connected()) return;
-
   String topic = String("door/counter/telemetry/") + DEVICE_UID;
-  static StaticJsonDocument<2048> doc;
-  doc.clear();
+  StaticJsonDocument<1024> doc;
+  doc["device_uid"] = DEVICE_UID;
+  doc["state"] = (int)flowState;
   
-  doc["u"] = DEVICE_UID;
-  doc["s"] = (int)flowState;
-  
-  JsonArray zones = doc.createNestedArray("z");
+  JsonArray zones = doc.createNestedArray("zones");
   for (int i = 0; i < 64; i++) {
     zones.add(measurementData.distance_mm[i]);
   }
   
-  static char buffer[2048];
-  size_t n = serializeJson(doc, buffer);
-  if (n > 0) {
-    mqttClient.publish(topic.c_str(), buffer);
-  }
+  char buffer[1024];
+  serializeJson(doc, buffer);
+  mqttClient.publish(topic.c_str(), buffer);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -537,7 +530,7 @@ void mqttReconnect() {
 void publishBufferedEvents() {
   if (!mqttClient.connected()) return;
 
-  if (eventCount > 0) {
+  while (eventCount > 0) {
     CounterEvent ev = eventBuffer[0];
     
     StaticJsonDocument<256> doc;
@@ -558,6 +551,7 @@ void publishBufferedEvents() {
       eventCount--;
     } else {
       Serial.println("Publish failed, keeping in buffer");
+      break;
     }
   }
 }
@@ -724,7 +718,7 @@ void setup()
   // Setup MQTT
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(4096);
+  mqttClient.setBufferSize(1024);
   
   currentState = NORMAL_OPERATION;
 }
@@ -743,6 +737,7 @@ void loop()
   } else {
     mqttClient.loop();
     publishBufferedEvents();
+    publishTelemetry();
   }
 
   updateStatusLED();
@@ -758,7 +753,6 @@ void loop()
     if (myImager.isDataReady())
     {
       myImager.getRangingData(&measurementData);
-      publishTelemetry();
       processFlow();
       updateAdaptiveBaseline();
 
