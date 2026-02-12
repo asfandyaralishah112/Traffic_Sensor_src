@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.027";
+String currentVersion = "1.0.028";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -74,7 +74,7 @@ SystemState currentState = BOOT;
 struct CalibrationData {
   uint8_t zone_mask[64];
   uint16_t floor_distance[64];
-  uint16_t threshold[64];
+  uint16_t noise[64]; // v1.0.028: Adaptive noise floor
 };
 
 CalibrationData calData;
@@ -157,22 +157,25 @@ void saveCalibration() {
   preferences.begin("counter-cal", false);
   preferences.putBytes("zone_mask", calData.zone_mask, 64);
   preferences.putBytes("floor_dist", calData.floor_distance, 128); // 64 * 2
-  preferences.putBytes("threshold", calData.threshold, 128); // 64 * 2
+  preferences.putBytes("noise", calData.noise, 128); // 64 * 2
   preferences.end();
   Serial.println("Calibration saved to NVS");
 }
 
 void loadCalibration() {
   preferences.begin("counter-cal", true);
-  if (preferences.isKey("zone_mask")) {
+  if (preferences.isKey("zone_mask") && preferences.isKey("noise")) {
     preferences.getBytes("zone_mask", calData.zone_mask, 64);
     preferences.getBytes("floor_dist", calData.floor_distance, 128);
-    preferences.getBytes("threshold", calData.threshold, 128);
+    preferences.getBytes("noise", calData.noise, 128);
     Serial.println("Calibration loaded from NVS");
   } else {
     Serial.println("No calibration found in NVS, using defaults");
-    memset(calData.zone_mask, 1, 64); // Default: all zones valid (simplified)
-    for(int i=0; i<64; i++) calData.threshold[i] = 1000; // Default threshold
+    memset(calData.zone_mask, 0, 64); // Default: all zones valid
+    for(int i=0; i<64; i++) {
+        calData.floor_distance[i] = 4000;
+        calData.noise[i] = 50; 
+    }
   }
   preferences.end();
 }
@@ -250,13 +253,16 @@ void runCalibration() {
     delay(10);
   }
 
-  // Step 4: Threshold Calculation
-  Serial.println("Step 4: Threshold Calculation...");
+  // Step 4: Noise Calculation
+  Serial.println("Step 4: Noise Calculation...");
   for (int i = 0; i < 64; i++) {
-    if (calData.zone_mask[i] == 0) {
-      calData.threshold[i] = calData.floor_distance[i] / 2;
+    if (calData.zone_mask[i] == 0 && counts[i] > 1) {
+      float mean = sum_dist[i] / counts[i];
+      float variance = (sum_sq_dist[i] / counts[i]) - pow(mean, 2);
+      calData.noise[i] = (uint16_t)sqrt(max(0.0f, variance));
+      if (calData.noise[i] < 20) calData.noise[i] = 20; // Floor at 20mm
     } else {
-      calData.threshold[i] = 0;
+      calData.noise[i] = 50; // Default
     }
   }
 
@@ -309,8 +315,11 @@ void processFlow() {
     if (i < 16) continue; 
     
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      // Detect occupancy: distance < threshold
-      if (filteredDist[i] > 0 && filteredDist[i] < calData.threshold[i]) {
+      // Noise-Adaptive Thresholding (v1.0.028: Match Plot1.py)
+      float diff = (float)calData.floor_distance[i] - (float)filteredDist[i];
+      float threshold = (float)calData.noise[i] * 4.0f; // NOISE_MULTIPLIER = 4.0
+
+      if (diff > threshold) {
         int row = i / 8;
         sumY += (float)row;
         activeCount++;
@@ -360,22 +369,29 @@ void updateAdaptiveBaseline() {
   if (trackingActive) return;
   if (activePixels > 0) return;
 
-  const float alpha = 0.003;
+  const float BASELINE_ALPHA = 0.001;
+  const float NOISE_ALPHA = 0.01;
 
   for (int i = 0; i < 64; i++) {
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      // Rule 6: Safety Clamp
       uint16_t currentDist = filteredDist[i];
-      uint16_t baselineDist = calData.floor_distance[i];
       
-      if (currentDist < 3900 && abs((int)currentDist - (int)baselineDist) <= 300) {
-          // Rule 4: Exponential Moving Average
-          float newFloor = ((1.0f - alpha) * (float)baselineDist) + (alpha * (float)currentDist);
-          calData.floor_distance[i] = (uint16_t)newFloor;
-          
-          // Rule 5: Threshold update
-          calData.threshold[i] = calData.floor_distance[i] / 2;
-        }
+      // Plot1.py logic: Update baseline and noise when NOT occupied
+      // We already checked activePixels == 0, but we can be more specific per zone
+      
+      float diff = (float)calData.floor_distance[i] - (float)currentDist;
+      float abs_err = abs(diff);
+      
+      // Update Floor Distance (Baseline)
+      float newFloor = ((1.0f - BASELINE_ALPHA) * (float)calData.floor_distance[i]) + (BASELINE_ALPHA * (float)currentDist);
+      calData.floor_distance[i] = (uint16_t)newFloor;
+      
+      // Update Noise Floor
+      float newNoise = ((1.0f - NOISE_ALPHA) * (float)calData.noise[i]) + (NOISE_ALPHA * abs_err);
+      calData.noise[i] = (uint16_t)newNoise;
+      
+      // Clamp noise floor to avoid over-sensitivity
+      if (calData.noise[i] < 20) calData.noise[i] = 20;
     }
   }
 }
