@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.032";
+String currentVersion = "1.0.033";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -319,7 +319,7 @@ void processFlow() {
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
       // Noise-Adaptive Thresholding (v1.0.028: Match Plot1.py)
       float diff = (float)calData.floor_distance[i] - (float)filteredDist[i];
-      float threshold = (float)calData.noise[i] * 4.0f; // NOISE_MULTIPLIER = 4.0
+      float threshold = (float)calData.noise[i] * 3.0f; // v1.0.033: Reduced from 4.0 for sensitivity
 
       if (diff > threshold) {
         int row = i / 8;
@@ -660,12 +660,12 @@ void initVL53()
   sensorInitialized = true;
   myImager.setResolution(8 * 8); // Reverted to 8x8 v1.0.025
   myImager.setRangingFrequency(15); // Max for 8x8 is 15Hz
+  myImager.setIntegrationTime(10); // v1.0.033: Improved sensitivity for shorter/small targets
   
   // Optimization for faster recovery/floor detection (v1.0.022)
   myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
   myImager.setTargetOrder(SF_VL53L5CX_TARGET_ORDER::STRONGEST);
   myImager.setSharpenerPercent(5);       // Low sharpener to help distinguish targets
-  myImager.setIntegrationTime(5);      // v1.0.026: 5ms for real-time detection
   
   myImager.startRanging();
 
