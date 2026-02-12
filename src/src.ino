@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.026";
+String currentVersion = "1.0.027";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -81,32 +81,21 @@ CalibrationData calData;
 Preferences preferences;
 bool sensorInitialized = false;
 
-// ================= REGION OCCUPANCY =================
-bool A_active = false;
-bool M_active = false;
-bool B_active = false;
+// ================= REGION OCCUPANCY (v1.0.027: Calculated in processFlow) =================
+int activePixels = 0;
 
-enum FlowState {
-  FLOW_IDLE,
-  FLOW_A,           // IN started (A only)
-  FLOW_AM,          // IN progressing (A and M)
-  FLOW_MB,          // IN progressing (M and B)
-  FLOW_B_AFTER_IN,  // IN almost done (B only)
-  
-  FLOW_B,           // OUT started (B only)
-  FLOW_BM,          // OUT progressing (B and M)
-  FLOW_MA,          // OUT progressing (M and A)
-  FLOW_A_AFTER_OUT, // OUT almost done (A only)
-  
-  FLOW_CLEARING     // Waiting for all regions to clear
-};
+// ================= TRAJECTORY TRACKING (v1.0.027) =================
+#define MIN_ACTIVE_PIXELS 3
+#define DOOR_LINE 3.5
+#define MAX_TRAJECTORY 20
+#define MIN_TRAJECTORY_LEN 5
 
-FlowState flowState = FLOW_IDLE;
+float trajectory[MAX_TRAJECTORY];
+int trajectoryIdx = 0;
+bool trackingActive = false;
+
 volatile bool otaRequested = false;
-unsigned long stateStartTime = 0;
-int clearFrames = 0;
-#define MIN_STATE_FRAMES 2
-#define CLEAR_FRAMES_REQ 5
+unsigned long lastTelemetry = 0; // v1.0.027: unified timing
 
 // ================= EVENT BUFFER =================
 struct CounterEvent {
@@ -293,28 +282,7 @@ void checkCalibrationTrigger() {
 // =====================================================
 // DETECTION LOGIC
 // =====================================================
-void updateRegionOccupancy() {
-  int aCount = 0;
-  int mCount = 0;
-  int bCount = 0;
-
-  for (int i = 0; i < 64; i++) {
-    if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      if (filteredDist[i] > 0 && 
-          filteredDist[i] < calData.threshold[i]) {
-        
-        int col = i % 8;
-        if (col <= 2) aCount++;
-        else if (col <= 5) mCount++;
-        else bCount++;
-      }
-    }
-  }
-
-  A_active = (aCount >= 2);
-  M_active = (mCount >= 2);
-  B_active = (bCount >= 2);
-}
+// updateRegionOccupancy is removed in v1.0.027 as centroid logic handles occupancy
 
 void recordEvent(String direction) {
   if (eventCount < MAX_BUFFERED_EVENTS) {
@@ -333,113 +301,55 @@ void recordEvent(String direction) {
 }
 
 void processFlow() {
-  updateRegionOccupancy();
+  int activeCount = 0;
+  float sumY = 0;
   
-  static FlowState candidateState = FLOW_IDLE;
-  static int candidateFrames = 0;
-
-  // Determine which state the current occupancy points towards
-  FlowState nextStep = flowState; 
-
-  switch (flowState) {
-    case FLOW_IDLE:
-      if (A_active && !M_active && !B_active) nextStep = FLOW_A;
-      else if (B_active && !M_active && !A_active) nextStep = FLOW_B;
-      break;
-
-    case FLOW_A:
-      if (A_active && M_active) nextStep = FLOW_AM;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_AM:
-      if (M_active && B_active) nextStep = FLOW_MB;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_MB:
-      if (!A_active && !M_active && B_active) nextStep = FLOW_B_AFTER_IN;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_B_AFTER_IN:
-      if (!A_active && !M_active && !B_active) nextStep = FLOW_CLEARING;
-      break;
-
-    case FLOW_B:
-      if (B_active && M_active) nextStep = FLOW_BM;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_BM:
-      if (M_active && A_active) nextStep = FLOW_MA;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_MA:
-      if (!B_active && !M_active && A_active) nextStep = FLOW_A_AFTER_OUT;
-      else if (!A_active && !M_active && !B_active) nextStep = FLOW_IDLE;
-      break;
-
-    case FLOW_A_AFTER_OUT:
-      if (!A_active && !M_active && !B_active) nextStep = FLOW_CLEARING;
-      break;
-
-    case FLOW_CLEARING:
-      // Clearing logic is slightly different: we wait for N frames of silence.
-      if (!A_active && !M_active && !B_active) {
-        clearFrames++;
-        if (clearFrames >= CLEAR_FRAMES_REQ) {
-          flowState = FLOW_IDLE;
-          clearFrames = 0;
-          candidateFrames = 0;
-          candidateState = FLOW_IDLE;
-          Serial.println("Flow Cleared -> IDLE");
-        }
-      } else {
-        if (clearFrames > 0) {
-          Serial.print("Clearing interrupted: A="); Serial.print(A_active);
-          Serial.print(" M="); Serial.print(M_active);
-          Serial.print(" B="); Serial.println(B_active);
-          
-          // Debug: which zones are active?
-          for (int i = 0; i < 64; i++) {
-            if (calData.zone_mask[i] == 0) {
-              if (measurementData.distance_mm[i] > 0 && 
-                  measurementData.distance_mm[i] < calData.threshold[i] &&
-                  (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9)) {
-                Serial.printf("Z%d: d=%d th=%d st=%d\n", i, measurementData.distance_mm[i], calData.threshold[i], measurementData.target_status[i]);
-              }
-            }
-          }
-        }
-        clearFrames = 0;
+  for (int i = 0; i < 64; i++) {
+    // Skip first two rows (v1.0.027: consistency with Plot1.py)
+    if (i < 16) continue; 
+    
+    if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
+      // Detect occupancy: distance < threshold
+      if (filteredDist[i] > 0 && filteredDist[i] < calData.threshold[i]) {
+        int row = i / 8;
+        sumY += (float)row;
+        activeCount++;
       }
-      return; // Skip the transition logic below for clearing
+    }
   }
 
-  // Handle Stability for all other states
-  if (nextStep != flowState) {
-    if (nextStep == candidateState) {
-      candidateFrames++;
-      if (candidateFrames >= MIN_STATE_FRAMES) {
-        // Condition met for required frames, transition now
-        if (flowState == FLOW_B_AFTER_IN && nextStep == FLOW_CLEARING) recordEvent("IN");
-        if (flowState == FLOW_A_AFTER_OUT && nextStep == FLOW_CLEARING) recordEvent("OUT");
-        
-        flowState = nextStep;
-        candidateFrames = 0;
-      }
-    } else {
-      // Condition changed, reset stability counter
-      candidateState = nextStep;
-      candidateFrames = 0;
+  if (activeCount >= MIN_ACTIVE_PIXELS) {
+    float centroidY = sumY / (float)activeCount;
+    
+    if (!trackingActive) {
+      trajectoryIdx = 0;
+      trackingActive = true;
+      Serial.println("Motion Started");
+    }
+    if (trajectoryIdx < MAX_TRAJECTORY) {
+      trajectory[trajectoryIdx++] = centroidY;
     }
   } else {
-    // Condition matches current state, reset candidate
-    candidateFrames = 0;
-    candidateState = flowState;
+    if (trackingActive) {
+      if (trajectoryIdx >= MIN_TRAJECTORY_LEN) {
+        float startY = trajectory[0];
+        float endY = trajectory[trajectoryIdx - 1];
+
+        // Crossing detection (DOOR_LINE = 3.5)
+        if (startY > DOOR_LINE && endY < DOOR_LINE) {
+          recordEvent("IN");
+        } else if (startY < DOOR_LINE && endY > DOOR_LINE) {
+          recordEvent("OUT");
+        }
+      }
+      
+      trackingActive = false;
+      trajectoryIdx = 0;
+      Serial.println("Motion Ended");
+    }
   }
+  
+  activePixels = activeCount; // Update global for baseline logic v1.0.027
 }
 
 // =====================================================
@@ -447,8 +357,8 @@ void processFlow() {
 // =====================================================
 void updateAdaptiveBaseline() {
   if (currentState != NORMAL_OPERATION) return;
-  if (flowState != FLOW_IDLE) return;
-  if (A_active || M_active || B_active) return;
+  if (trackingActive) return;
+  if (activePixels > 0) return;
 
   const float alpha = 0.003;
 
@@ -497,7 +407,7 @@ void publishTelemetry() {
 
   StaticJsonDocument<1024> doc;
   doc["device_uid"] = DEVICE_UID;
-  doc["state"] = (int)flowState;
+  doc["state"] = trackingActive ? 1 : 0;
   
   JsonArray zones = doc.createNestedArray("zones");
   for (int i = 0; i < 64; i++) {

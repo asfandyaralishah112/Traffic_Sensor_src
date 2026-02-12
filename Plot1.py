@@ -14,9 +14,11 @@ UDP_PORT = 5005
 
 MIN_ACTIVE_PIXELS = 3
 
-BASELINE_ALPHA = 0.001     # ~1 minute adaptation
-NOISE_ALPHA = 0.01         # noise learning speed
-NOISE_MULTIPLIER = 4.0     # detection sensitivity
+BASELINE_ALPHA = 0.001
+NOISE_ALPHA = 0.01
+NOISE_MULTIPLIER = 4.0
+
+DOOR_LINE = 3.5   # horizontal crossing line
 
 # =========================
 # UDP DATA
@@ -107,18 +109,13 @@ def update(frame):
         grid = zones.reshape((8,8))
         img.set_data(grid)
 
-        # -------------------------
-        # INIT BASELINE + NOISE
-        # -------------------------
+        # INIT
         if baseline is None:
             baseline = grid.astype(float)
             noise = np.ones((8,8)) * 50
             print("Baseline captured")
             continue
 
-        # -------------------------
-        # ADAPTIVE THRESHOLD
-        # -------------------------
         diff = baseline - grid
         abs_err = np.abs(diff)
 
@@ -129,10 +126,6 @@ def update(frame):
 
         active_pixels = np.sum(occupied)
 
-        # -------------------------
-        # UPDATE BASELINE + NOISE
-        # only where NOT occupied
-        # -------------------------
         stable_mask = ~occupied
 
         baseline[stable_mask] = (
@@ -145,42 +138,36 @@ def update(frame):
             NOISE_ALPHA * abs_err[stable_mask]
         )
 
-        # -------------------------
-        # TRACK TRAJECTORY
-        # -------------------------
+        # -------- TRACK VERTICAL MOTION --------
         if active_pixels >= MIN_ACTIVE_PIXELS:
 
             ys, xs = np.where(occupied)
-            centroid_x = np.mean(xs)
+            centroid_y = np.mean(ys)
 
             if not tracking_active:
                 trajectory = []
                 tracking_active = True
 
-            trajectory.append(centroid_x)
+            trajectory.append(centroid_y)
 
         else:
             if tracking_active and len(trajectory) > 5:
 
                 start = trajectory[0]
                 end = trajectory[-1]
-                min_x = min(trajectory)
-                max_x = max(trajectory)
 
-                if start < 2 and max_x > 5 and end > 5:
+                # crossing detection
+                if start > DOOR_LINE and end < DOOR_LINE:
                     total_in += 1
                     print("IN")
 
-                elif start > 5 and min_x < 2 and end < 2:
+                elif start < DOOR_LINE and end > DOOR_LINE:
                     total_out += 1
                     print("OUT")
 
             tracking_active = False
             trajectory = []
 
-        # -------------------------
-        # DISPLAY
-        # -------------------------
         info_text.set_text(
             f"IN : {total_in}\n"
             f"OUT: {total_out}\n\n"
