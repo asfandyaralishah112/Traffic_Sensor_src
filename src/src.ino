@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.030";
+String currentVersion = "1.0.031";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -95,6 +95,8 @@ float trajectory[MAX_TRAJECTORY];
 int trajectoryIdx = 0;
 bool trackingActive = false;
 int clearCounter = 0;
+bool reachedEntranceSide = false; // v1.0.031: Traversal confirmation
+bool reachedExitSide = false;     // v1.0.031: Traversal confirmation
 
 volatile bool otaRequested = false;
 unsigned long lastTelemetry = 0; // v1.0.027: unified timing
@@ -336,8 +338,15 @@ void processFlow() {
     if (!trackingActive) {
       trajectoryIdx = 0;
       trackingActive = true;
+      reachedEntranceSide = false; // Reset flags (v1.0.031)
+      reachedExitSide = false;
       Serial.println("Motion Started");
     }
+
+    // Traversal Confirmation (Hysteresis v1.0.031)
+    if (centroidY > DOOR_LINE + 1.0f) reachedEntranceSide = true;
+    if (centroidY < DOOR_LINE - 1.0f) reachedExitSide = true;
+
     if (trajectoryIdx < MAX_TRAJECTORY) {
       trajectory[trajectoryIdx++] = centroidY;
     } else {
@@ -356,10 +365,10 @@ void processFlow() {
           float startY = trajectory[0];
           float endY = trajectory[trajectoryIdx - 1];
 
-          // Crossing detection (DOOR_LINE = 3.5)
-          if (startY > DOOR_LINE && endY < DOOR_LINE) {
+          // Crossing detection with Traversal Confirmation (v1.0.031)
+          if (startY > DOOR_LINE && endY < DOOR_LINE && reachedExitSide) {
             recordEvent("IN");
-          } else if (startY < DOOR_LINE && endY > DOOR_LINE) {
+          } else if (startY < DOOR_LINE && endY > DOOR_LINE && reachedEntranceSide) {
             recordEvent("OUT");
           }
         }
