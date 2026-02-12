@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.031";
+String currentVersion = "1.0.032";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -84,19 +84,17 @@ bool sensorInitialized = false;
 // ================= REGION OCCUPANCY (v1.0.027: Calculated in processFlow) =================
 int activePixels = 0;
 
-// ================= TRAJECTORY TRACKING (v1.0.027) =================
+// ================= TRAJECTORY TRACKING (v1.0.032: Exact Parity with Plot1.py) =================
 #define MIN_ACTIVE_PIXELS 3
 #define DOOR_LINE 3.5
-#define MAX_TRAJECTORY 20
-#define MIN_TRAJECTORY_LEN 5
-#define CLEAR_CONFIRM_FRAMES 3
+#define MIN_MOTION_FRAMES 5
 
-float trajectory[MAX_TRAJECTORY];
-int trajectoryIdx = 0;
+float firstCentroidY = 0;
+float lastCentroidY = 0;
+int motionFrameCount = 0;
+bool reachedEntranceZone = false; // v1.0.032: Traversal confirmation
+bool reachedExitZone = false;     // v1.0.032: Traversal confirmation
 bool trackingActive = false;
-int clearCounter = 0;
-bool reachedEntranceSide = false; // v1.0.031: Traversal confirmation
-bool reachedExitSide = false;     // v1.0.031: Traversal confirmation
 
 volatile bool otaRequested = false;
 unsigned long lastTelemetry = 0; // v1.0.027: unified timing
@@ -333,51 +331,37 @@ void processFlow() {
 
   if (activeCount >= MIN_ACTIVE_PIXELS) {
     float centroidY = sumY / (float)activeCount;
-    clearCounter = 0; // Reset clear counter when motion is detected
     
     if (!trackingActive) {
-      trajectoryIdx = 0;
       trackingActive = true;
-      reachedEntranceSide = false; // Reset flags (v1.0.031)
-      reachedExitSide = false;
+      firstCentroidY = centroidY;
+      motionFrameCount = 0;
+      reachedEntranceZone = false; // Reset flags (v1.0.032)
+      reachedExitZone = false;
       Serial.println("Motion Started");
     }
 
-    // Traversal Confirmation (Hysteresis v1.0.031)
-    if (centroidY > DOOR_LINE + 1.0f) reachedEntranceSide = true;
-    if (centroidY < DOOR_LINE - 1.0f) reachedExitSide = true;
+    // Traversal Confirmation (Hysteresis v1.0.032)
+    if (centroidY > DOOR_LINE + 1.0f) reachedEntranceZone = true;
+    if (centroidY < DOOR_LINE - 1.0f) reachedExitZone = true;
+    
+    lastCentroidY = centroidY;
+    motionFrameCount++;
 
-    if (trajectoryIdx < MAX_TRAJECTORY) {
-      trajectory[trajectoryIdx++] = centroidY;
-    } else {
-      // shift left and append newest value (Sliding Window v1.0.030)
-      for (int i = 0; i < MAX_TRAJECTORY - 1; i++) {
-        trajectory[i] = trajectory[i + 1];
-      }
-      trajectory[MAX_TRAJECTORY - 1] = centroidY;
-    }
   } else {
     if (trackingActive) {
-      clearCounter++;
-
-      if (clearCounter >= CLEAR_CONFIRM_FRAMES) {
-        if (trajectoryIdx >= MIN_TRAJECTORY_LEN) {
-          float startY = trajectory[0];
-          float endY = trajectory[trajectoryIdx - 1];
-
-          // Crossing detection with Traversal Confirmation (v1.0.031)
-          if (startY > DOOR_LINE && endY < DOOR_LINE && reachedExitSide) {
-            recordEvent("IN");
-          } else if (startY < DOOR_LINE && endY > DOOR_LINE && reachedEntranceSide) {
-            recordEvent("OUT");
-          }
+      if (motionFrameCount >= MIN_MOTION_FRAMES) {
+        // Evaluate crossing with Traversal Confirmation (v1.0.032)
+        if (firstCentroidY > DOOR_LINE && lastCentroidY < DOOR_LINE && reachedExitZone) {
+          recordEvent("IN");
+        } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
+          recordEvent("OUT");
         }
-        
-        trackingActive = false;
-        trajectoryIdx = 0;
-        clearCounter = 0;
-        Serial.println("Motion Ended (Confirmed)");
       }
+      
+      trackingActive = false;
+      motionFrameCount = 0;
+      Serial.println("Motion Ended");
     }
   }
   
@@ -544,6 +528,22 @@ void publishBufferedEvents() {
 }
 
 // =====================================================
+// OTA PROGRESS CALLBACK
+// =====================================================
+void update_progress(int cur, int total) {
+  static bool led_state = false;
+  static unsigned long last_blink = 0;
+  if (millis() - last_blink > 150) {
+    led_state = !led_state;
+    // Blink Blue: LOW = ON, HIGH = OFF
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_BLUE, led_state ? LOW : HIGH);
+    last_blink = millis();
+  }
+}
+
+// =====================================================
 // OTA CHECK
 // =====================================================
 void checkForOTA()
@@ -592,6 +592,7 @@ void checkForOTA()
       WiFiClientSecure updateClient;
       updateClient.setInsecure();
 
+      httpUpdate.onProgress(update_progress); // v1.0.032: Blue LED Blink
       t_httpUpdate_return ret =
         httpUpdate.update(updateClient, firmwareURL);
 
