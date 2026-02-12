@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.028";
+String currentVersion = "1.0.029";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -89,10 +89,12 @@ int activePixels = 0;
 #define DOOR_LINE 3.5
 #define MAX_TRAJECTORY 20
 #define MIN_TRAJECTORY_LEN 5
+#define CLEAR_CONFIRM_FRAMES 3
 
 float trajectory[MAX_TRAJECTORY];
 int trajectoryIdx = 0;
 bool trackingActive = false;
+int clearCounter = 0;
 
 volatile bool otaRequested = false;
 unsigned long lastTelemetry = 0; // v1.0.027: unified timing
@@ -329,6 +331,7 @@ void processFlow() {
 
   if (activeCount >= MIN_ACTIVE_PIXELS) {
     float centroidY = sumY / (float)activeCount;
+    clearCounter = 0; // Reset clear counter when motion is detected
     
     if (!trackingActive) {
       trajectoryIdx = 0;
@@ -340,21 +343,26 @@ void processFlow() {
     }
   } else {
     if (trackingActive) {
-      if (trajectoryIdx >= MIN_TRAJECTORY_LEN) {
-        float startY = trajectory[0];
-        float endY = trajectory[trajectoryIdx - 1];
+      clearCounter++;
 
-        // Crossing detection (DOOR_LINE = 3.5)
-        if (startY > DOOR_LINE && endY < DOOR_LINE) {
-          recordEvent("IN");
-        } else if (startY < DOOR_LINE && endY > DOOR_LINE) {
-          recordEvent("OUT");
+      if (clearCounter >= CLEAR_CONFIRM_FRAMES) {
+        if (trajectoryIdx >= MIN_TRAJECTORY_LEN) {
+          float startY = trajectory[0];
+          float endY = trajectory[trajectoryIdx - 1];
+
+          // Crossing detection (DOOR_LINE = 3.5)
+          if (startY > DOOR_LINE && endY < DOOR_LINE) {
+            recordEvent("IN");
+          } else if (startY < DOOR_LINE && endY > DOOR_LINE) {
+            recordEvent("OUT");
+          }
         }
+        
+        trackingActive = false;
+        trajectoryIdx = 0;
+        clearCounter = 0;
+        Serial.println("Motion Ended (Confirmed)");
       }
-      
-      trackingActive = false;
-      trajectoryIdx = 0;
-      Serial.println("Motion Ended");
     }
   }
   
