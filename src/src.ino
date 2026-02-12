@@ -10,8 +10,20 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.025";
+String currentVersion = "1.0.026";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
+
+// ================= PROTOTYPES =================
+void publishStatus(String status);
+void publishTelemetry();
+void runCalibration();
+void initVL53();
+void saveCalibration();
+void loadCalibration();
+void updateAdaptiveBaseline();
+void processFlow();
+void updateStatusLED();
+void setLED(bool r, bool g, bool b);
 
 // ================= DEVICE ID =================
 const char* DEVICE_UID = "ESP32C6_COUNTER_001";
@@ -109,6 +121,7 @@ int eventCount = 0;
 // ================= VL53 =================
 SparkFun_VL53L5CX myImager;
 VL53L5CX_ResultsData measurementData;
+uint16_t filteredDist[64]; // v1.0.026: Filtered distances based on target status
 
 WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient; 
@@ -287,9 +300,8 @@ void updateRegionOccupancy() {
 
   for (int i = 0; i < 64; i++) {
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      if (measurementData.distance_mm[i] > 0 && 
-          measurementData.distance_mm[i] < calData.threshold[i] &&
-          (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9)) {
+      if (filteredDist[i] > 0 && 
+          filteredDist[i] < calData.threshold[i]) {
         
         int col = i % 8;
         if (col <= 2) aCount++;
@@ -442,14 +454,11 @@ void updateAdaptiveBaseline() {
 
   for (int i = 0; i < 64; i++) {
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      if ((measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) &&
-          measurementData.distance_mm[i] > 0) {
-        
-        uint16_t currentDist = measurementData.distance_mm[i];
-        uint16_t baselineDist = calData.floor_distance[i];
-
-        // Rule 6: Safety Clamp
-        if (abs((int)currentDist - (int)baselineDist) <= 300) {
+      // Rule 6: Safety Clamp
+      uint16_t currentDist = filteredDist[i];
+      uint16_t baselineDist = calData.floor_distance[i];
+      
+      if (currentDist < 3900 && abs((int)currentDist - (int)baselineDist) <= 300) {
           // Rule 4: Exponential Moving Average
           float newFloor = ((1.0f - alpha) * (float)baselineDist) + (alpha * (float)currentDist);
           calData.floor_distance[i] = (uint16_t)newFloor;
@@ -457,7 +466,6 @@ void updateAdaptiveBaseline() {
           // Rule 5: Threshold update
           calData.threshold[i] = calData.floor_distance[i] / 2;
         }
-      }
     }
   }
 }
@@ -493,7 +501,7 @@ void publishTelemetry() {
   
   JsonArray zones = doc.createNestedArray("zones");
   for (int i = 0; i < 64; i++) {
-    zones.add(measurementData.distance_mm[i]);
+    zones.add(filteredDist[i]);
   }
   
   char buffer[1024];
@@ -707,7 +715,7 @@ void initVL53()
   myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
   myImager.setTargetOrder(SF_VL53L5CX_TARGET_ORDER::STRONGEST);
   myImager.setSharpenerPercent(5);       // Low sharpener to help distinguish targets
-  myImager.setIntegrationTime(20);      // 20ms integration time for stable 15Hz ranging
+  myImager.setIntegrationTime(5);      // v1.0.026: 5ms for real-time detection
   
   myImager.startRanging();
 
@@ -794,11 +802,20 @@ void loop()
     if (myImager.isDataReady())
     {
       myImager.getRangingData(&measurementData);
-      // Logic stripped for debugging v1.0.023
-      // processFlow();
-      // updateAdaptiveBaseline();
       
-      publishTelemetry(); // Still share raw grid over UDP
+      // v1.0.026: Populating filtered distance layer
+      for (int i = 0; i < 64; i++) {
+        if (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) {
+          filteredDist[i] = measurementData.distance_mm[i];
+        } else {
+          filteredDist[i] = 4000; // Treat as FAR distance
+        }
+      }
+
+      processFlow();
+      updateAdaptiveBaseline();
+      
+      publishTelemetry(); // Share filtered grid over UDP
 
       frameCount++;
       if (millis() - lastPrint > 1000)
