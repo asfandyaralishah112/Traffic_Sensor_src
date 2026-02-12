@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.029";
+String currentVersion = "1.0.030";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -340,6 +340,12 @@ void processFlow() {
     }
     if (trajectoryIdx < MAX_TRAJECTORY) {
       trajectory[trajectoryIdx++] = centroidY;
+    } else {
+      // shift left and append newest value (Sliding Window v1.0.030)
+      for (int i = 0; i < MAX_TRAJECTORY - 1; i++) {
+        trajectory[i] = trajectory[i + 1];
+      }
+      trajectory[MAX_TRAJECTORY - 1] = centroidY;
     }
   } else {
     if (trackingActive) {
