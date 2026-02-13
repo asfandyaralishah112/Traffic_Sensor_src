@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.038";
+String currentVersion = "1.0.039";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -659,8 +659,8 @@ void initVL53()
 
   sensorInitialized = true;
   myImager.setResolution(8 * 8); // Reverted to 8x8 v1.0.025
-  myImager.setRangingFrequency(5); // Max for 8x8 is 15Hz
-  myImager.setIntegrationTime(5); // v1.0.038: Improved sensitivity for shorter/small targets
+  myImager.setRangingFrequency(10); // Max for 8x8 is 15Hz
+  myImager.setIntegrationTime(50); // v1.0.039: Improved sensitivity for shorter/small targets
   
   // Optimization for faster recovery/floor detection (v1.0.022)
   myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
