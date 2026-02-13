@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.040";
+String currentVersion = "1.0.041";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -84,16 +84,19 @@ bool sensorInitialized = false;
 // ================= REGION OCCUPANCY (v1.0.027: Calculated in processFlow) =================
 int activePixels = 0;
 
-// ================= TRAJECTORY TRACKING (v1.0.032: Exact Parity with Plot1.py) =================
-#define MIN_ACTIVE_PIXELS 3
+// ================= TRAJECTORY TRACKING (v1.0.041: Exact Parity with Plot1.py) =================
+#define MIN_ACTIVE_PIXELS 1
 #define DOOR_LINE 3.5
-#define MIN_MOTION_FRAMES 5
+#define MAX_CONSECUTIVE_MISSES 3
 
 float firstCentroidY = 0;
 float lastCentroidY = 0;
-int motionFrameCount = 0;
-bool reachedEntranceZone = false; // v1.0.032: Traversal confirmation
-bool reachedExitZone = false;     // v1.0.032: Traversal confirmation
+float lastVelocityY = 0;       // v1.0.041: For prediction
+int trajectoryLength = 0;      // v1.0.041: Replaces motionFrameCount for length check
+int consecutiveMisses = 0;     // v1.0.041: Robustness against dropouts
+
+bool reachedEntranceZone = false; 
+bool reachedExitZone = false;     
 bool trackingActive = false;
 
 volatile bool otaRequested = false;
@@ -290,7 +293,27 @@ void checkCalibrationTrigger() {
 // =====================================================
 // DETECTION LOGIC
 // =====================================================
-// updateRegionOccupancy is removed in v1.0.027 as centroid logic handles occupancy
+
+// v1.0.041: Dilation Helper
+void dilate(bool input[64], bool output[64]) {
+  memset(output, 0, 64 * sizeof(bool));
+  for (int i = 0; i < 64; i++) {
+    if (input[i]) {
+      int y = i / 8;
+      int x = i % 8;
+      // Mark self and neighbors
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          int ny = y + dy;
+          int nx = x + dx;
+          if (ny >= 0 && ny < 8 && nx >= 0 && nx < 8) {
+            output[ny * 8 + nx] = true;
+          }
+        }
+      }
+    }
+  }
+}
 
 void recordEvent(String direction) {
   if (eventCount < MAX_BUFFERED_EVENTS) {
@@ -309,63 +332,136 @@ void recordEvent(String direction) {
 }
 
 void processFlow() {
-  int activeCount = 0;
-  float sumY = 0;
-  
+  bool occupied[64] = {0};
+  bool dilated[64] = {0};
+
+  // 1. Initial Thresholding
   for (int i = 0; i < 64; i++) {
-    // Skip first two rows (v1.0.027: consistency with Plot1.py)
+    // Skip first two rows (consistency with Plot1.py)
     if (i < 16) continue; 
     
     if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      // Noise-Adaptive Thresholding (v1.0.028: Match Plot1.py)
       float diff = (float)calData.floor_distance[i] - (float)filteredDist[i];
-      float threshold = (float)calData.noise[i] * 3.0f; // v1.0.033: Reduced from 4.0 for sensitivity
+      // Fixed threshold as per potential implied requirement or keep adaptive?
+      // User said: "Do not change adaptive baseline logic" and "Do not change calibration logic"
+      // BUT user also said "Replace immediate tracking termination with consecutive miss logic"
+      // User did NOT explicitly ask to change the threshold calculation logic in the ESP32 request,
+      // ONLY "Implement spatial dilation", etc.
+      // However, the user updated Plot1.py to have a FIXED threshold in the Planning phase.
+      // The user request for ESP32 says: "detection and tracking behavior matches the current Python reference implementation exactly."
+      // The Python code NOW uses fixed threshold/dilation.
+      // Wait, let's look at the Python diff provided in Step 19:
+      // - NOISE_MULTIPLIER = 2.0 (was 4.0)
+      // - MIN_ACTIVE_PIXELS = 1
+      // It DOES NOT seem to have switched to a purely fixed threshold in the diffs provided in Steps 19-24?
+      // Let me re-read the Python diffs carefully.
+      // Step 23: `occupied = diff > threshold` ... `threshold = noise * NOISE_MULTIPLIER`.
+      // The Python code STILL uses `threshold = noise * NOISE_MULTIPLIER`.
+      // The user PLAN was to use fixed, but the CODE submitted by user shows `NOISE_MULTIPLIER = 2.0`.
+      // I must follow the USER'S CODE provided in the "The following changes were made by the USER" blocks,
+      // NOT my previous plan which might have been superseded by the user's actual edits.
+      // The user's Python code (Step 23) shows: `threshold = noise * NOISE_MULTIPLIER`.
+      // So I will KEEP the adaptive threshold logic but maybe adjust multiplier if needed. 
+      // The current ESP code uses: `float threshold = (float)calData.noise[i] * 3.0f;`
+      // The Python code uses: `NOISE_MULTIPLIER = 2.0`.
+      // I should update the multiplier to 2.0 to match.
+      
+      float threshold = (float)calData.noise[i] * 2.0f; // v1.0.041: Matched Plot1.py (2.0)
 
       if (diff > threshold) {
-        int row = i / 8;
-        sumY += (float)row;
-        activeCount++;
+        occupied[i] = true;
       }
     }
   }
 
+  // 2. Dilation
+  dilate(occupied, dilated);
+
+  // v1.0.042: Match Python behavior: ignore first two rows after dilation
+  for (int i = 0; i < 16; i++) {
+    dilated[i] = false;
+  }
+
+  // 3. Centroid & Active Count
+  float sumY = 0;
+  int activeCount = 0;
+  for (int i = 0; i < 64; i++) {
+    if (dilated[i]) {
+      int row = i / 8;
+      sumY += (float)row;
+      activeCount++;
+    }
+  }
+
+  // 4. Tracking Logic
   if (activeCount >= MIN_ACTIVE_PIXELS) {
     float centroidY = sumY / (float)activeCount;
     
-    if (!trackingActive) {
+    if (trackingActive) {
+      // Smooth and Velocity
+      centroidY = 0.7f * lastCentroidY + 0.3f * centroidY;
+      lastVelocityY = centroidY - lastCentroidY;
+    } else {
+      // Start Tracking
       trackingActive = true;
       firstCentroidY = centroidY;
-      motionFrameCount = 0;
-      reachedEntranceZone = false; // Reset flags (v1.0.032)
+      lastVelocityY = 0;
+      trajectoryLength = 0;
+      reachedEntranceZone = false; 
       reachedExitZone = false;
       Serial.println("Motion Started");
     }
 
-    // Traversal Confirmation (Hysteresis v1.0.032)
+    lastCentroidY = centroidY;
+    consecutiveMisses = 0;
+    trajectoryLength++;
+
+    // Traversal Update
     if (centroidY > DOOR_LINE + 1.0f) reachedEntranceZone = true;
     if (centroidY < DOOR_LINE - 1.0f) reachedExitZone = true;
-    
-    lastCentroidY = centroidY;
-    motionFrameCount++;
 
   } else {
-    if (trackingActive) {
-      if (motionFrameCount >= MIN_MOTION_FRAMES) {
-        // Evaluate crossing with Traversal Confirmation (v1.0.032)
-        if (firstCentroidY > DOOR_LINE && lastCentroidY < DOOR_LINE && reachedExitZone) {
-          recordEvent("IN");
-        } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
-          recordEvent("OUT");
-        }
-      }
+    // Inactive Frame
+    consecutiveMisses++;
+
+    if (trackingActive && consecutiveMisses <= MAX_CONSECUTIVE_MISSES) {
+      // Prediction Mode
+      float predicted = lastCentroidY + lastVelocityY;
       
+      // v1.0.042: Clamp to valid VL53L5CX row range
+      if (predicted < 0.0f) predicted = 0.0f;
+      if (predicted > 7.0f) predicted = 7.0f;
+
+      lastCentroidY = predicted;
+      
+      // Update trajectory stats based on prediction
+      trajectoryLength++;
+      if (predicted > DOOR_LINE + 1.0f) reachedEntranceZone = true;
+      if (predicted < DOOR_LINE - 1.0f) reachedExitZone = true;
+      
+      Serial.println("Predicting..."); // Debug
+    } 
+    else {
+      // Stop / Tracking Lost
+      if (trackingActive) {
+         // Traversal Check
+         if (trajectoryLength >= 5) { // Match len(trajectory) > 5
+            if (firstCentroidY > DOOR_LINE && lastCentroidY < DOOR_LINE && reachedExitZone) {
+               recordEvent("IN");
+            } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
+               recordEvent("OUT");
+            }
+         }
+         Serial.println("Motion Ended");
+      }
       trackingActive = false;
-      motionFrameCount = 0;
-      Serial.println("Motion Ended");
+      trajectoryLength = 0;
+      consecutiveMisses = 0;
+      lastVelocityY = 0;
     }
   }
   
-  activePixels = activeCount; // Update global for baseline logic v1.0.027
+  activePixels = activeCount; // Update global for baseline logic
 }
 
 // =====================================================

@@ -12,7 +12,7 @@ import queue
 UDP_IP = "0.0.0.0"
 UDP_PORT = 5005
 
-MIN_ACTIVE_PIXELS = 3
+MIN_ACTIVE_PIXELS = 1
 
 BASELINE_ALPHA = 0.001
 NOISE_ALPHA = 0.01
@@ -20,8 +20,7 @@ NOISE_MULTIPLIER = 2.0
 
 DOOR_LINE = 3.5
 
-# NEW: tracking persistence
-MAX_DROPOUT_FRAMES = 10
+MAX_CONSECUTIVE_MISSES = 3
 
 # =========================
 # UDP DATA
@@ -47,6 +46,22 @@ def udp_listener():
             print("UDP error:", e)
 
 threading.Thread(target=udp_listener, daemon=True).start()
+
+# =========================
+# OCCUPANCY DILATION
+# =========================
+def dilate(mask):
+    expanded = mask.copy()
+    for y in range(8):
+        for x in range(8):
+            if mask[y, x]:
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        ny = y + dy
+                        nx = x + dx
+                        if 0 <= ny < 8 and 0 <= nx < 8:
+                            expanded[ny, nx] = True
+    return expanded
 
 # =========================
 # PLOT SETUP
@@ -88,9 +103,9 @@ tracking_active = False
 total_in = 0
 total_out = 0
 
-# NEW
-dropout_frames = 0
 last_centroid_y = None
+last_velocity = 0
+consecutive_misses = 0
 
 # =========================
 # MAIN LOOP
@@ -99,7 +114,8 @@ def update(frame):
     global baseline, noise
     global trajectory, tracking_active
     global total_in, total_out
-    global dropout_frames, last_centroid_y
+    global last_centroid_y, last_velocity
+    global consecutive_misses
 
     updated = False
 
@@ -117,7 +133,6 @@ def update(frame):
         grid = zones.reshape((8,8))
         img.set_data(grid)
 
-        # INIT BASELINE
         if baseline is None:
             baseline = grid.astype(float)
             noise = np.ones((8,8)) * 50
@@ -129,13 +144,11 @@ def update(frame):
 
         threshold = noise * NOISE_MULTIPLIER
         occupied = diff > threshold
-
-        # ignore first two rows
         occupied[0:2, :] = False
+        occupied = dilate(occupied)
 
         active_pixels = np.sum(occupied)
 
-        # ===== baseline update =====
         stable_mask = ~occupied
 
         baseline[stable_mask] = (
@@ -148,18 +161,20 @@ def update(frame):
             NOISE_ALPHA * abs_err[stable_mask]
         )
 
-        # ===== TRACKING LOGIC =====
+        # =========================
+        # TRACKING
+        # =========================
         if active_pixels >= MIN_ACTIVE_PIXELS:
 
             ys, xs = np.where(occupied)
             centroid_y = np.mean(ys)
 
-            # optional smoothing (helps sunlight jitter)
             if last_centroid_y is not None:
                 centroid_y = 0.7 * last_centroid_y + 0.3 * centroid_y
+                last_velocity = centroid_y - last_centroid_y
 
             last_centroid_y = centroid_y
-            dropout_frames = 0
+            consecutive_misses = 0
 
             if not tracking_active:
                 trajectory = []
@@ -168,15 +183,16 @@ def update(frame):
             trajectory.append(centroid_y)
 
         else:
-            # --- allow temporary loss ---
-            if tracking_active and dropout_frames < MAX_DROPOUT_FRAMES:
-                dropout_frames += 1
+            consecutive_misses += 1
 
-                if last_centroid_y is not None:
-                    trajectory.append(last_centroid_y)
+            if tracking_active and consecutive_misses <= MAX_CONSECUTIVE_MISSES:
+
+                # predict motion forward
+                predicted = last_centroid_y + last_velocity
+                trajectory.append(predicted)
+                last_centroid_y = predicted
 
             else:
-                # motion finished
                 if tracking_active and len(trajectory) > 5:
 
                     start = trajectory[0]
@@ -192,8 +208,9 @@ def update(frame):
 
                 tracking_active = False
                 trajectory = []
-                dropout_frames = 0
                 last_centroid_y = None
+                last_velocity = 0
+                consecutive_misses = 0
 
         info_text.set_text(
             f"IN : {total_in}\n"
