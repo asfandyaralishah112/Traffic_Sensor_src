@@ -10,7 +10,7 @@
 #include <Preferences.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.034";
+String currentVersion = "1.0.035";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -665,7 +665,7 @@ void initVL53()
   // Optimization for faster recovery/floor detection (v1.0.022)
   myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
   myImager.setTargetOrder(SF_VL53L5CX_TARGET_ORDER::STRONGEST);
-  myImager.setSharpenerPercent(5);       // Low sharpener to help distinguish targets
+  myImager.setSharpenerPercent(10);       // Low sharpener to help distinguish targets
   
   myImager.startRanging();
 
