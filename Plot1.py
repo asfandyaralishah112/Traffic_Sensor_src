@@ -18,7 +18,10 @@ BASELINE_ALPHA = 0.001
 NOISE_ALPHA = 0.01
 NOISE_MULTIPLIER = 2.0
 
-DOOR_LINE = 3.5   # horizontal crossing line
+DOOR_LINE = 3.5
+
+# NEW: tracking persistence
+MAX_DROPOUT_FRAMES = 10
 
 # =========================
 # UDP DATA
@@ -85,6 +88,10 @@ tracking_active = False
 total_in = 0
 total_out = 0
 
+# NEW
+dropout_frames = 0
+last_centroid_y = None
+
 # =========================
 # MAIN LOOP
 # =========================
@@ -92,6 +99,7 @@ def update(frame):
     global baseline, noise
     global trajectory, tracking_active
     global total_in, total_out
+    global dropout_frames, last_centroid_y
 
     updated = False
 
@@ -109,7 +117,7 @@ def update(frame):
         grid = zones.reshape((8,8))
         img.set_data(grid)
 
-        # INIT
+        # INIT BASELINE
         if baseline is None:
             baseline = grid.astype(float)
             noise = np.ones((8,8)) * 50
@@ -122,10 +130,12 @@ def update(frame):
         threshold = noise * NOISE_MULTIPLIER
         occupied = diff > threshold
 
+        # ignore first two rows
         occupied[0:2, :] = False
 
         active_pixels = np.sum(occupied)
 
+        # ===== baseline update =====
         stable_mask = ~occupied
 
         baseline[stable_mask] = (
@@ -138,11 +148,18 @@ def update(frame):
             NOISE_ALPHA * abs_err[stable_mask]
         )
 
-        # -------- TRACK VERTICAL MOTION --------
+        # ===== TRACKING LOGIC =====
         if active_pixels >= MIN_ACTIVE_PIXELS:
 
             ys, xs = np.where(occupied)
             centroid_y = np.mean(ys)
+
+            # optional smoothing (helps sunlight jitter)
+            if last_centroid_y is not None:
+                centroid_y = 0.7 * last_centroid_y + 0.3 * centroid_y
+
+            last_centroid_y = centroid_y
+            dropout_frames = 0
 
             if not tracking_active:
                 trajectory = []
@@ -151,22 +168,32 @@ def update(frame):
             trajectory.append(centroid_y)
 
         else:
-            if tracking_active and len(trajectory) > 5:
+            # --- allow temporary loss ---
+            if tracking_active and dropout_frames < MAX_DROPOUT_FRAMES:
+                dropout_frames += 1
 
-                start = trajectory[0]
-                end = trajectory[-1]
+                if last_centroid_y is not None:
+                    trajectory.append(last_centroid_y)
 
-                # crossing detection
-                if start > DOOR_LINE and end < DOOR_LINE:
-                    total_in += 1
-                    print("IN")
+            else:
+                # motion finished
+                if tracking_active and len(trajectory) > 5:
 
-                elif start < DOOR_LINE and end > DOOR_LINE:
-                    total_out += 1
-                    print("OUT")
+                    start = trajectory[0]
+                    end = trajectory[-1]
 
-            tracking_active = False
-            trajectory = []
+                    if start > DOOR_LINE and end < DOOR_LINE:
+                        total_in += 1
+                        print("IN")
+
+                    elif start < DOOR_LINE and end > DOOR_LINE:
+                        total_out += 1
+                        print("OUT")
+
+                tracking_active = False
+                trajectory = []
+                dropout_frames = 0
+                last_centroid_y = None
 
         info_text.set_text(
             f"IN : {total_in}\n"
