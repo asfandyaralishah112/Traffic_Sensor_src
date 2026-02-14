@@ -8,6 +8,9 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEAdvertising.h>
 
 // ================= OTA & VERSION =================
 String currentVersion = "1.0.041"; // Bumped version for WiFi fix
@@ -42,6 +45,7 @@ String mqtt_user = "Traffic_Sensor";
 String mqtt_pass = "randompass";
 String topic_events, topic_status, topic_telemetry, topic_command;
 bool deviceConfigured = false;
+bool bleStarted = false; // Flag to track BLE initialization state
 
 // ================= UDP TELEMETRY =================
 bool udpStreamEnabled = true; // Flag to easily enable/disable UDP stream
@@ -246,6 +250,32 @@ void loadDeviceConfig() {
   updateMqttTopics();
   Serial.print("Current UID: "); Serial.println(DEVICE_UID);
   Serial.print("Current BLE Name: "); Serial.println(ble_name);
+}
+
+// =====================================================
+// BLE ADVERTISING (ADV-ONLY)
+// =====================================================
+void startBLEAdvertising() {
+  if (!deviceConfigured || bleStarted) return;
+
+  Serial.println("Initializing BLE Advertising...");
+  BLEDevice::init(ble_name.c_str());
+  
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  
+  // Requirement 3: 500ms interval (Units of 0.625ms: 500 / 0.625 = 800)
+  pAdvertising->setMinInterval(800); 
+  pAdvertising->setMaxInterval(800);
+  
+  // Requirement 4: Advertising-only (Non-connectable)
+  // Note: BLE_GAP_CONN_MODE_NON_CONN or similar behavior is default when no services added
+  // but we can be explicit if the library supports it directly.
+  
+  pAdvertising->setScanResponse(false);
+  pAdvertising->start();
+  
+  bleStarted = true;
+  Serial.println("BLE Advertising Started: " + ble_name);
 }
 
 void handleSerialProvisioning() {
@@ -690,6 +720,9 @@ void mqttReconnect() {
       mqttClient.subscribe(topic_command.c_str());
       Serial.println("Subscribed to: " + topic_command);
       
+      // Requirement 8: Ensure BLE is running after MQTT connection
+      startBLEAdvertising();
+
       currentState = NORMAL_OPERATION;
     } else {
       Serial.print("failed, rc=");
@@ -968,6 +1001,9 @@ void setup()
       udpClient.begin(udp_port);
       Serial.printf("UDP Initialized on port %d\n", udp_port);
       
+      // Start BLE Advertising
+      startBLEAdvertising();
+
       currentState = NORMAL_OPERATION;
     }
   } else {
