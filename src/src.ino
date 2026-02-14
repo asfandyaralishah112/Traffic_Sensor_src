@@ -11,6 +11,7 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEAdvertising.h>
+#include <time.h>
 
 // ================= OTA & VERSION =================
 String currentVersion = "1.0.041"; // Bumped version for WiFi fix
@@ -27,6 +28,8 @@ void updateAdaptiveBaseline();
 void processFlow();
 void updateStatusLED();
 void setLED(bool r, bool g, bool b);
+void syncTime();
+void correctBufferedTimestamps();
 
 // ================= DEVICE ID =================
 String DEVICE_UID = "UNCONFIGURED";
@@ -45,6 +48,9 @@ String mqtt_user = "Traffic_Sensor";
 String mqtt_pass = "randompass";
 String topic_events, topic_status, topic_telemetry, topic_command;
 bool deviceConfigured = false;
+bool timeSynced = false;
+unsigned long lastTimeSyncMillis = 0; // For daily re-sync
+unsigned long dailySyncOffset = 0;    // Random jitter for fleet de-clustering
 bool bleStarted = false; // Flag to track BLE initialization state
 
 // ================= UDP TELEMETRY =================
@@ -115,7 +121,8 @@ unsigned long lastTelemetry = 0; // v1.0.027: unified timing
 // ================= EVENT BUFFER =================
 struct CounterEvent {
   String direction;
-  unsigned long timestamp;
+  time_t timestamp;
+  bool timestampValid;
 };
 
 #define MAX_BUFFERED_EVENTS 100
@@ -276,6 +283,52 @@ void startBLEAdvertising() {
   
   bleStarted = true;
   Serial.println("BLE Advertising Started: " + ble_name);
+}
+
+// =====================================================
+// NTP TIME SYNC
+// =====================================================
+void syncTime() {
+  Serial.println("Configuring NTP...");
+  // Requirement 2: pool.ntp.org and time.google.com
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  
+  unsigned long start = millis();
+  while (millis() - start < 10000) {
+    time_t now = time(nullptr);
+    // Requirement 2: Valid time check (> 1700000000)
+    if (now > 1700000000) {
+      timeSynced = true;
+      lastTimeSyncMillis = millis(); // Track sync time for daily check
+      Serial.print("Time synchronized: "); Serial.println(now);
+      publishStatus("time_synced");
+      correctBufferedTimestamps();
+      return;
+    }
+    delay(500);
+    Serial.print(".");
+    updateStatusLED();
+  }
+  Serial.println("\nNTP Timeout. Proceeding without sync.");
+}
+
+void correctBufferedTimestamps() {
+  if (!timeSynced) return;
+  
+  time_t currentEpoch = time(nullptr);
+  unsigned long currentMillis = millis();
+  
+  for (int i = 0; i < eventCount; i++) {
+    if (!eventBuffer[i].timestampValid) {
+      // Requirement 3: millis() Overflow Safety (49-Day Uptime Issue)
+      unsigned long eventMillis = (unsigned long)eventBuffer[i].timestamp;
+      uint32_t ageMs = (uint32_t)(currentMillis - eventMillis);
+      time_t epochAtEvent = currentEpoch - (ageMs / 1000);
+      eventBuffer[i].timestamp = epochAtEvent;
+      eventBuffer[i].timestampValid = true;
+    }
+  }
+  Serial.println("Buffered events corrected to UTC.");
 }
 
 void handleSerialProvisioning() {
@@ -455,18 +508,32 @@ void dilate(bool input[64], bool output[64]) {
 }
 
 void recordEvent(String direction) {
+  time_t t;
+  bool valid;
+  
+  // Requirement 5: Handle synced vs non-synced time
+  if (timeSynced) {
+    t = time(nullptr);
+    valid = true;
+  } else {
+    t = (time_t)millis();
+    valid = false;
+  }
+
   if (eventCount < MAX_BUFFERED_EVENTS) {
     eventBuffer[eventCount].direction = direction;
-    eventBuffer[eventCount].timestamp = millis();
+    eventBuffer[eventCount].timestamp = t;
+    eventBuffer[eventCount].timestampValid = valid;
     eventCount++;
-    Serial.println("Event Recorded: " + direction);
+    Serial.println("Event Recorded: " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
   } else {
     for (int i = 0; i < MAX_BUFFERED_EVENTS - 1; i++) {
       eventBuffer[i] = eventBuffer[i+1];
     }
     eventBuffer[MAX_BUFFERED_EVENTS-1].direction = direction;
-    eventBuffer[MAX_BUFFERED_EVENTS-1].timestamp = millis();
-    Serial.println("Event Recorded (Buffer Full): " + direction);
+    eventBuffer[MAX_BUFFERED_EVENTS-1].timestamp = t;
+    eventBuffer[MAX_BUFFERED_EVENTS-1].timestampValid = valid;
+    Serial.println("Event Recorded (Buffer Full): " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
   }
 }
 
@@ -651,6 +718,9 @@ void publishTelemetry() {
     zones.add(filteredDist[i]);
   }
   
+  // Requirement 8: Add UTC timestamp to telemetry if synced
+  if (timeSynced) doc["timestamp"] = (uint32_t)time(nullptr);
+  
   char buffer[1024];
   size_t len = serializeJson(doc, buffer);
   
@@ -735,6 +805,9 @@ void mqttReconnect() {
 void publishBufferedEvents() {
   if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
   if (!mqttClient.connected()) return;
+  
+  // Requirement 7: Block publishing until time is synchronized
+  if (!timeSynced) return; 
 
   while (eventCount > 0) {
     CounterEvent ev = eventBuffer[0];
@@ -926,6 +999,9 @@ void setup()
   // OBJECTIVE 2 & 4: Load configurations from NVS
   loadDeviceConfig();
 
+  // Requirement: initialize NTP jitter (0-60 minutes)
+  dailySyncOffset = random(0, 3600000);
+  
   // Initialize GPIOs
   pinMode(PIN_CALIBRATION, INPUT_PULLUP);
   pinMode(LED_RED, OUTPUT);
@@ -983,6 +1059,9 @@ void setup()
       Serial.println("\nWiFi connected");
       Serial.println(WiFi.localIP());
       
+      // Requirement 9: WiFi -> NTP -> MQTT
+      syncTime();
+
       // OTA check first
       checkForOTA();
       
@@ -1028,7 +1107,23 @@ void loop()
   }
 
   // Handle Networking
-  if (WiFi.status() != WL_CONNECTED) {
+  static bool wasConnected = false;
+  bool nowConnected = (WiFi.status() == WL_CONNECTED);
+
+  if (nowConnected && !wasConnected) {
+    Serial.println("WiFi reconnected, syncing time...");
+    syncTime();
+  }
+  wasConnected = nowConnected;
+
+  const unsigned long DAILY_SYNC_INTERVAL = 86400000UL; // 24 hours
+  // Requirement: Add random offset to prevent sync clustering in large fleets
+  if (nowConnected && (millis() - lastTimeSyncMillis > (DAILY_SYNC_INTERVAL + dailySyncOffset))) {
+    Serial.println("Daily time sync...");
+    syncTime();
+  }
+
+  if (!nowConnected) {
     currentState = WIFI_CONNECT;
     // We could add reconnection fallback logic here too if needed, 
     // but typically we stay in loop trying to reconnect.
