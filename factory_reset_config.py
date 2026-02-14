@@ -19,7 +19,7 @@ class ProvisionTool:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Cavline Global - Traffic Sensor Provisioning")
+        self.root.title("Cavline Global - Traffic Sensor Factory Configuration")
         self.root.geometry("560x650")
         self.root.configure(bg="#071218")
 
@@ -49,7 +49,7 @@ class ProvisionTool:
             pass
 
         title = tk.Label(container,
-                         text="Traffic Sensor Gen 1 Provisioning",
+                         text="Traffic Sensor Factory Configuration",
                          bg="#071218",
                          fg="#e6eef3",
                          font=("Segoe UI", 14, "bold"))
@@ -189,7 +189,9 @@ class ProvisionTool:
     # ==================================================
     # EXCEL LOGGING
     # ==================================================
-    def log_to_excel(self, uid, user, password, topic, server):
+    def log_to_excel(self, uid, user, password, server):
+
+        now = datetime.now()
 
         if not os.path.exists(EXCEL_FILE):
             wb = Workbook()
@@ -198,7 +200,6 @@ class ProvisionTool:
                 "UID",
                 "MQTT User",
                 "MQTT Password",
-                "MQTT Topic",
                 "MQTT Server",
                 "Date",
                 "Time"
@@ -208,13 +209,10 @@ class ProvisionTool:
         wb = load_workbook(EXCEL_FILE)
         ws = wb.active
 
-        now = datetime.now()
-
         ws.append([
             uid,
             user,
             password,
-            topic,
             server,
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M:%S")
@@ -246,7 +244,6 @@ class ProvisionTool:
 
         mqtt_user = uid
         mqtt_pass = self.generate_password()
-        mqtt_topic = f"door/counter/events/{uid}"
 
         payload = {
             "cmd": "write_config",
@@ -254,8 +251,7 @@ class ProvisionTool:
             "mqtt_server": self.entries["MQTT Server"].get(),
             "mqtt_port": int(self.entries["MQTT Port"].get()),
             "mqtt_user": mqtt_user,
-            "mqtt_pass": mqtt_pass,
-            "mqtt_topic": mqtt_topic
+            "mqtt_pass": mqtt_pass
         }
 
         try:
@@ -264,6 +260,7 @@ class ProvisionTool:
 
             ser = serial.Serial(port, 115200, timeout=3)
             time.sleep(1)
+            ser.reset_input_buffer()
 
             self.log("Sending configuration...")
             self.set_progress(40)
@@ -282,12 +279,11 @@ class ProvisionTool:
                 self.set_progress(80)
 
                 self.log_to_excel(
-                    uid,
-                    mqtt_user,
-                    mqtt_pass,
-                    mqtt_topic,
-                    self.entries["MQTT Server"].get()
-                )
+                                uid,
+                                mqtt_user,
+                                mqtt_pass,
+                                self.entries["MQTT Server"].get()
+                            )
 
                 new_uid = self.increment_uid(uid)
                 self.entries["Start UID"].delete(0, tk.END)

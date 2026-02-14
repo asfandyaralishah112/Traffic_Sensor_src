@@ -26,8 +26,8 @@ void updateStatusLED();
 void setLED(bool r, bool g, bool b);
 
 // ================= DEVICE ID =================
-const char* DEVICE_UID = "ESP32C6_COUNTER_001";
-const char* BLE_BROADCAST_NAME = "SmartCounter_001";
+String DEVICE_UID = "UNCONFIGURED";
+String ble_name = "SmartCounter-UNCONFIGURED";
 
 // ================= WIFI & PROVISIONING =================
 #include "Provisioning.h"
@@ -36,13 +36,15 @@ String wifi_pass = "";
 String business_name = "";
 
 // ================= MQTT =================
-const char* mqtt_server = "192.168.3.10";
-const int mqtt_port = 1883;
-const char* mqtt_user = "Traffic_Sensor";
-const char* mqtt_pass = "admin";
-const char* mqtt_topic = "door/counter/events";
+String mqtt_server = "www.cavlineglobal.com";
+int mqtt_port = 0;
+String mqtt_user = "Traffic_Sensor";
+String mqtt_pass = "randompass";
+String topic_events, topic_status, topic_telemetry, topic_command;
+bool deviceConfigured = false;
 
 // ================= UDP TELEMETRY =================
+bool udpStreamEnabled = true; // Flag to easily enable/disable UDP stream
 const char* udp_server = "192.168.3.10";
 const int udp_port = 5005;
 WiFiUDP udpClient;
@@ -82,6 +84,7 @@ struct CalibrationData {
 
 CalibrationData calData;
 Preferences preferences; // Calibration preferences
+Preferences devicePrefs; // Factory provisioning preferences
 bool sensorInitialized = false;
 
 // ================= REGION OCCUPANCY (v1.0.027: Calculated in processFlow) =================
@@ -195,6 +198,100 @@ void loadCalibration() {
     }
   }
   preferences.end();
+}
+
+void updateDynamicNames() {
+  // BLE name logic: EXACTLY the business_name if available
+  if (business_name.length() > 0) {
+    ble_name = business_name;
+  } else {
+    ble_name = "SmartCounter-UNCONFIGURED";
+  }
+}
+
+void updateMqttTopics() {
+  String baseTopic = "cavline/traffic_sensor/" + DEVICE_UID;
+  topic_events    = baseTopic + "/events";
+  topic_status    = baseTopic + "/status";
+  topic_telemetry = baseTopic + "/telemetry";
+  topic_command   = baseTopic + "/command";
+  
+  Serial.println("MQTT Topics Generated:");
+  Serial.println(" - Status: " + topic_status);
+  Serial.println(" - Events: " + topic_events);
+}
+
+void loadDeviceConfig() {
+  devicePrefs.begin("device-config", true);
+  deviceConfigured = devicePrefs.getBool("configured", false);
+  if (deviceConfigured) {
+    DEVICE_UID = devicePrefs.getString("uid", "UNCONFIGURED");
+    mqtt_server = devicePrefs.getString("mqtt_server", mqtt_server);
+    mqtt_port = devicePrefs.getUInt("mqtt_port", mqtt_port);
+    mqtt_user = devicePrefs.getString("mqtt_user", mqtt_user);
+    mqtt_pass = devicePrefs.getString("mqtt_pass", mqtt_pass);
+    Serial.println("Device configuration loaded from NVS");
+  } else {
+    Serial.println("No factory device configuration found.");
+    DEVICE_UID = "UNCONFIGURED";
+  }
+  devicePrefs.end();
+  
+  // Also load WiFi/Business context to form the BLE name
+  if (isWiFiConfigured()) {
+    business_name = getStoredBusiness();
+  }
+  
+  updateDynamicNames();
+  updateMqttTopics();
+  Serial.print("Current UID: "); Serial.println(DEVICE_UID);
+  Serial.print("Current BLE Name: "); Serial.println(ble_name);
+}
+
+void handleSerialProvisioning() {
+  static String inputBuffer = "";
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      StaticJsonDocument<512> doc;
+      DeserializationError error = deserializeJson(doc, inputBuffer);
+      
+      if (!error) {
+        String cmd = doc["cmd"] | "";
+        if (cmd == "write_config") {
+          bool force = doc["force"] | false;
+          if (deviceConfigured && !force) {
+            Serial.println("ERROR: Already configured. Use \"force\":true to overwrite.");
+          } else {
+            devicePrefs.begin("device-config", false);
+            devicePrefs.putString("uid", doc["uid"] | "UNCONFIGURED");
+            devicePrefs.putString("mqtt_server", doc["mqtt_server"] | "www.cavlineglobal.com");
+            
+            uint32_t port = 1883;
+            if (doc["mqtt_port"].is<uint32_t>()) {
+                port = doc["mqtt_port"].as<uint32_t>();
+            }
+            devicePrefs.putUInt("mqtt_port", port);
+
+            devicePrefs.putString("mqtt_user", doc["mqtt_user"] | "Traffic_Sensor");
+            devicePrefs.putString("mqtt_pass", doc["mqtt_pass"] | "admin");
+            devicePrefs.putBool("configured", true);
+            devicePrefs.end();
+            
+            Serial.println("OK"); // MUST BE FIRST LINE FOR PYTHON TOOL
+            Serial.println("CONFIG_SAVED");
+            delay(500);
+            ESP.restart();
+          }
+        }
+      } else if (inputBuffer.length() > 0) {
+        Serial.println("ERROR");
+      }
+      inputBuffer = "";
+    } else if (c >= 32) {
+      inputBuffer += c;
+    }
+  }
 }
 // =====================================================
 // CALIBRATION MODE
@@ -492,24 +589,25 @@ void updateAdaptiveBaseline() {
 // MQTT FUNCTIONS
 // =====================================================
 void publishStatus(String status) {
+  if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
   if (!mqttClient.connected()) return;
   
-  String topic = String("door/counter/status/") + DEVICE_UID;
   StaticJsonDocument<256> doc;
   doc["device_uid"] = DEVICE_UID;
   doc["status"] = status;
   doc["version"] = currentVersion;
   doc["udp_sent"] = udpPacketsSent;
-  doc["business"] = business_name; // v1.0.042: Include Business Name
+  doc["business"] = business_name; 
   
   char buffer[256];
   serializeJson(doc, buffer);
-  mqttClient.publish(topic.c_str(), buffer);
+  mqttClient.publish(topic_status.c_str(), buffer);
   mqttClient.loop(); // Flush status message
   Serial.println("Status Published: " + status + " | UDP Sent: " + String(udpPacketsSent));
 }
 
 void publishTelemetry() {
+  if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
   static unsigned long lastTelemetry = 0;
   if (millis() - lastTelemetry < 50) return; // 20 FPS max for telemetry
   lastTelemetry = millis();
@@ -526,12 +624,19 @@ void publishTelemetry() {
   char buffer[1024];
   size_t len = serializeJson(doc, buffer);
   
-  udpClient.beginPacket(udp_server, udp_port);
-  udpClient.write((const uint8_t*)buffer, len);
-  if (udpClient.endPacket()) {
-    udpPacketsSent++;
-  } else {
-    Serial.println("UDP Packet Fail");
+  // Publish to MQTT
+  if (mqttClient.connected()) {
+    mqttClient.publish(topic_telemetry.c_str(), buffer);
+  }
+
+  if (udpStreamEnabled) {
+    udpClient.beginPacket(udp_server, udp_port);
+    udpClient.write((const uint8_t*)buffer, len);
+    if (udpClient.endPacket()) {
+      udpPacketsSent++;
+    } else {
+      Serial.println("UDP Packet Fail");
+    }
   }
 }
 
@@ -567,13 +672,23 @@ void mqttReconnect() {
   if (millis() - lastConnectAttempt > 5000) {
     lastConnectAttempt = millis();
     Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect(DEVICE_UID, mqtt_user, mqtt_pass)) {
+    if (mqttClient.connect(
+          DEVICE_UID.c_str(), 
+          mqtt_user.c_str(), 
+          mqtt_pass.c_str(), 
+          topic_status.c_str(), 
+          1, 
+          true, 
+          "{\"status\":\"offline\"}"
+        )) {
       Serial.println("connected");
       
+      // Publish online status immediately
+      publishStatus("online");
+      
       // Subscribe to command topic
-      String commandTopic = String("door/counter/commands/") + DEVICE_UID;
-      mqttClient.subscribe(commandTopic.c_str());
-      Serial.println("Subscribed to: " + commandTopic);
+      mqttClient.subscribe(topic_command.c_str());
+      Serial.println("Subscribed to: " + topic_command);
       
       currentState = NORMAL_OPERATION;
     } else {
@@ -585,6 +700,7 @@ void mqttReconnect() {
 }
 
 void publishBufferedEvents() {
+  if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
   if (!mqttClient.connected()) return;
 
   while (eventCount > 0) {
@@ -592,7 +708,7 @@ void publishBufferedEvents() {
     
     StaticJsonDocument<256> doc;
     doc["device_uid"] = DEVICE_UID;
-    doc["ble_name"] = BLE_BROADCAST_NAME;
+    doc["ble_name"] = ble_name;
     doc["timestamp"] = ev.timestamp;
     doc["direction"] = ev.direction;
     doc["business"] = business_name; // v1.0.042
@@ -600,7 +716,7 @@ void publishBufferedEvents() {
     char buffer[256];
     serializeJson(doc, buffer);
 
-    if (mqttClient.publish(mqtt_topic, buffer)) {
+    if (mqttClient.publish(topic_events.c_str(), buffer)) {
       Serial.println("Published: " + ev.direction);
       // Remove from buffer (shift)
       for (int i = 0; i < eventCount - 1; i++) {
@@ -765,7 +881,17 @@ void initVL53()
 void setup()
 {
   Serial.begin(115200);
-  delay(1000);
+  delay(100);
+  
+  // OBJECTIVE 1: 5-second Factory Provisioning Window (SILENT for Python Tool)
+  unsigned long factoryStart = millis();
+  while (millis() - factoryStart < 5000) {
+    handleSerialProvisioning();
+    delay(5);
+  }
+
+  // OBJECTIVE 2 & 4: Load configurations from NVS
+  loadDeviceConfig();
 
   // Initialize GPIOs
   pinMode(PIN_CALIBRATION, INPUT_PULLUP);
@@ -774,7 +900,7 @@ void setup()
   pinMode(LED_BLUE, OUTPUT);
   setLED(false, false, false); // All OFF (High)
 
-  // v1.0.042: Check WiFi Configuration
+  // WiFi Configuration logic
   if (isWiFiConfigured()) {
     Serial.println("WiFi Config Found. Configuring...");
     wifi_ssid = getStoredSSID();
@@ -815,7 +941,7 @@ void setup()
       if (millis() - startConnect > 60000) {
         Serial.println("\nConnection Failed. Falling back to AP Mode.");
         currentState = PROVISIONING_AP;
-        setupProvisioning();
+        setupProvisioning(DEVICE_UID);
         return; // Exit setup loop for WiFi
       }
     }
@@ -834,7 +960,7 @@ void setup()
       initVL53();
       
       // Setup MQTT
-      mqttClient.setServer(mqtt_server, mqtt_port);
+      mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
       mqttClient.setCallback(mqttCallback);
       mqttClient.setBufferSize(1024);
       
@@ -847,7 +973,7 @@ void setup()
   } else {
     Serial.println("No Config Found. Starting Provisioning Mode...");
     currentState = PROVISIONING_AP;
-    setupProvisioning();
+    setupProvisioning(DEVICE_UID);
   }
 }
 
@@ -856,6 +982,7 @@ void setup()
 // =====================================================
 void loop()
 {
+  handleSerialProvisioning();
   // v1.0.042: PROVISIONING LOOP
   if (currentState == PROVISIONING_AP) {
     loopProvisioning();

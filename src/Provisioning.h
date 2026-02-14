@@ -353,7 +353,7 @@ void handleSave() {
 }
 
 // Setup Provisioning Mode
-void setupProvisioning() {
+void setupProvisioning(String apName) {
     WiFi.mode(WIFI_AP);
     
     // Scan networks ONLY ONCE when AP starts
@@ -364,10 +364,7 @@ void setupProvisioning() {
         scannedSSID[i] = WiFi.SSID(i);
     }
     
-    // Generate AP Name: SmartCounter-XXXX
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    String apName = "SmartCounter-" + mac.substring(mac.length() - 4);
+    // Use provided UID as AP Name
     WiFi.softAP(apName.c_str());
     
     // Disable power saving for better responsiveness
