@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.042"; // Bumped version for WiFi fix
+String currentVersion = "1.0.042"; // Bumped version for Factory Reset Redesign
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -54,7 +54,7 @@ unsigned long dailySyncOffset = 0;    // Random jitter for fleet de-clustering
 bool bleStarted = false; // Flag to track BLE initialization state
 
 // ================= UDP TELEMETRY =================
-bool udpStreamEnabled = true; // Flag to easily enable/disable UDP stream
+bool udpStreamEnabled = false; // Flag to easily enable/disable UDP stream
 const char* udp_server = "192.168.3.10";
 const int udp_port = 5005;
 WiFiUDP udpClient;
@@ -196,11 +196,11 @@ void factoryReset() {
   
   Serial.println("WiFi Configuration Cleared.");
   
-  // Visual feedback: alternating Blue/Green for 3 seconds
-  for (int i = 0; i < 15; i++) {
+  // Visual feedback: Fast blue blinking for 2 seconds
+  for (int i = 0; i < 10; i++) {
     setLED(false, false, true); // Blue ON
     delay(100);
-    setLED(false, true, false); // Green ON
+    setLED(false, false, false); // Blue OFF
     delay(100);
   }
   
@@ -1038,6 +1038,108 @@ void setup()
   pinMode(LED_BLUE, OUTPUT);
   setLED(false, false, false); // All OFF (High)
 
+  // Load calibration from NVS
+  loadCalibration();
+  
+  // Start sensor for reset detection
+  initVL53();
+
+  // v1.0.043: Init Success Signal - Cyan (Blue+Green ON)
+  if (sensorInitialized) {
+    setLED(false, true, true);
+  }
+
+  // ===============================================
+  // TWO-STAGE FACTORY RESET GESTURE (Refined)
+  // ===============================================
+  if (sensorInitialized) {
+    Serial.println("Stage 1: Factory Reset Detection (15s)...");
+    unsigned long stage1Start = millis();
+    bool stage2Entered = false;
+    unsigned long lastBlink = 0;
+    bool blinkState = false;
+
+    // Stage 1: Detection Window (15s)
+    while (millis() - stage1Start < 15000) {
+      // 1Hz blue blink
+      if (millis() - lastBlink > 500) {
+        blinkState = !blinkState;
+        setLED(false, false, blinkState);
+        lastBlink = millis();
+      }
+
+      if (myImager.isDataReady()) {
+        myImager.getRangingData(&measurementData);
+        int coveredPixels = 0;
+        for (int i = 0; i < 64; i++) {
+          uint16_t d = measurementData.distance_mm[i];
+          // Close distance OR invalid return indicates obstruction
+          if (d < 80 || measurementData.target_status[i] == 0) {
+            coveredPixels++;
+          }
+        }
+
+        // Stage 1 Trigger: ANY coverage (40 out of 64 pixels)
+        if (coveredPixels >= 64) {
+          stage2Entered = true;
+          break;
+        }
+      }
+      delay(10);
+    }
+
+    if (stage2Entered) {
+      Serial.println("Stage 2: Continuous Cover Mode (15s)...");
+      unsigned long stage2Start = millis();
+      lastBlink = 0;
+      blinkState = false;
+
+      unsigned long uncoveredStart = 0;
+
+      // Stage 2: Continuous Coverage (15s)
+      while (millis() - stage2Start < 15000) {
+        // 2Hz blue blink
+        if (millis() - lastBlink > 250) {
+          blinkState = !blinkState;
+          setLED(false, false, blinkState);
+          lastBlink = millis();
+        }
+
+        if (myImager.isDataReady()) {
+          myImager.getRangingData(&measurementData);
+          int coveredPixels = 0;
+          for (int i = 0; i < 64; i++) {
+            uint16_t d = measurementData.distance_mm[i];
+            if (d < 20 || measurementData.target_status[i] == 0) {
+              coveredPixels++;
+            }
+          }
+          bool covered = (coveredPixels >= 64);
+
+          // Temporal Debounce for Stage 2 cancellation (400ms)
+          if (covered) {
+            uncoveredStart = 0;
+          } else {
+            if (uncoveredStart == 0) uncoveredStart = millis();
+            if (millis() - uncoveredStart > 400) {
+              Serial.println("Reset cancelled: Sensor uncovered for >400ms.");
+              stage2Entered = false;
+              break;
+            }
+          }
+        }
+        delay(10);
+      }
+
+      if (stage2Entered) {
+        factoryReset(); // Reboots device
+      }
+    }
+
+    Serial.println("Factory reset check complete.");
+    setLED(false, false, false); // All OFF
+  }
+
   // WiFi Configuration logic
   if (isWiFiConfigured()) {
     Serial.println("WiFi Config Found. Configuring...");
@@ -1085,72 +1187,7 @@ void setup()
 
       // OTA check first
       checkForOTA();
-      
-      // Load calibration from NVS
-      loadCalibration();
-      
-      // Start sensor after OTA
-      initVL53();
 
-      // ===============================================
-      // FACTORY RESET GESTURE WINDOW (15s)
-      // ===============================================
-      if (sensorInitialized) {
-        Serial.println("Factory Reset window open (15s)... Cover sensor 3x to reset.");
-        unsigned long windowStart = millis();
-        int gestureCount = 0;
-        bool isCurrentlyCovered = false;
-        unsigned long coverStartTime = 0;
-        unsigned long lastBlink = 0;
-        bool blinkState = false;
-
-        while (millis() - windowStart < 15000) {
-          // Slow blue blink (1Hz)
-          if (millis() - lastBlink > 500) {
-            blinkState = !blinkState;
-            setLED(false, false, blinkState);
-            lastBlink = millis();
-          }
-
-          if (myImager.isDataReady()) {
-            myImager.getRangingData(&measurementData);
-            
-            // Calculate average distance and active count
-            long sumDist = 0;
-            int count = 0;
-            for (int i = 0; i < 64; i++) {
-              if (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) {
-                sumDist += measurementData.distance_mm[i];
-                count++;
-              }
-            }
-            float avgDist = (count > 0) ? (float)sumDist / count : 4000.0f;
-
-            // "Covered" condition: all 64 zones see < 10mm
-            // Using count >= 60 as a robust threshold for "completely covered"
-            bool covered = (count >= 60 && avgDist < 15.0f); // Relaxed slightly to 15mm for robustness
-
-            if (covered && !isCurrentlyCovered) {
-              isCurrentlyCovered = true;
-              coverStartTime = millis();
-            } else if (!covered && isCurrentlyCovered) {
-              // Transition COVERED -> UNCOVERED
-              if (millis() - coverStartTime >= 300) {
-                gestureCount++;
-                Serial.printf("Gesture %d/3 detected!\n", gestureCount);
-                if (gestureCount >= 3) {
-                  factoryReset(); // This will reboot
-                }
-              }
-              isCurrentlyCovered = false;
-            }
-          }
-          delay(10);
-        }
-        Serial.println("Factory Reset window closed.");
-        setLED(false, false, false); // Reset LED after window
-      }
-      
       // Setup MQTT
       mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
       mqttClient.setCallback(mqttCallback);

@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
 import json
-import time
 import threading
 import paho.mqtt.client as mqtt
 from datetime import datetime
@@ -9,18 +8,19 @@ from datetime import datetime
 # ================= MQTT CONFIG =================
 MQTT_BROKER = "192.168.3.10"
 MQTT_PORT = 1883
-MQTT_USER = "Traffic_Sensor"
-MQTT_PASS = "admin"
+MQTT_USER = "CVL-TS1-26-000001"
+MQTT_PASS = "bEkbtc8Ued8y"
 
-DEVICE_UID = "ESP32C6_COUNTER_001"
+DEVICE_UID = "CVL-TS1-26-000001"
 
-TOPIC_EVENTS = "door/counter/events"
-TOPIC_STATUS = f"door/counter/status/{DEVICE_UID}"
-TOPIC_COMMAND = f"door/counter/commands/{DEVICE_UID}"
+BASE_TOPIC = f"cavline/traffic_sensor/{DEVICE_UID}"
+TOPIC_EVENTS = f"{BASE_TOPIC}/events"
+TOPIC_STATUS = f"{BASE_TOPIC}/status"
+TOPIC_COMMAND = f"{BASE_TOPIC}/command"
 
 # ================= GUI =================
 root = tk.Tk()
-root.title("ESP32 Smart Counter Control")
+root.title(f"Smart Counter Control - {DEVICE_UID}")
 root.geometry("900x600")
 
 main_frame = ttk.Frame(root, padding=10)
@@ -70,12 +70,12 @@ def on_message(client, userdata, msg):
         if msg.topic == TOPIC_EVENTS:
             direction = payload.get("direction", "?")
             ts = timestamp()
-            add_event(f"{ts}  {direction}")
+            add_event(f"{ts}   {direction}")
 
         elif msg.topic == TOPIC_STATUS:
             status = payload.get("status", "unknown")
             ts = timestamp()
-            add_status(f"{ts}  {status}")
+            add_status(f"{ts}   {status}")
 
     except Exception as e:
         add_status(f"{timestamp()} JSON error: {e}")
@@ -101,11 +101,23 @@ def send_ota():
     client.publish(TOPIC_COMMAND, payload)
     add_status(f"{timestamp()} OTA check requested")
 
+def clear_events():
+    event_list.delete(0, tk.END)
+
+def clear_status():
+    status_list.delete(0, tk.END)
+
 cal_btn = ttk.Button(button_frame, text="Calibrate", command=send_calibrate)
 cal_btn.pack(side="left", padx=5)
 
 ota_btn = ttk.Button(button_frame, text="OTA Check", command=send_ota)
 ota_btn.pack(side="left", padx=5)
+
+clear_event_btn = ttk.Button(button_frame, text="Clear Events", command=clear_events)
+clear_event_btn.pack(side="left", padx=20)
+
+clear_status_btn = ttk.Button(button_frame, text="Clear Status", command=clear_status)
+clear_status_btn.pack(side="left", padx=5)
 
 # ================= START GUI =================
 root.mainloop()
