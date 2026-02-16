@@ -1040,19 +1040,11 @@ void setup()
     Serial.println("WiFi Mode After Reset:");
     Serial.println(WiFi.getMode()); // Should be 1 (WIFI_STA)
     
-    unsigned long startConnect = millis();
     while (WiFi.status() != WL_CONNECTED) {
       delay(500);
       Serial.print(".");
       updateStatusLED();
-      
-      // v1.0.042: Fallback to AP if connection fails > 60s
-      if (millis() - startConnect > 60000) {
-        Serial.println("\nConnection Failed. Falling back to AP Mode.");
-        currentState = PROVISIONING_AP;
-        setupProvisioning(DEVICE_UID);
-        return; // Exit setup loop for WiFi
-      }
+      // Keep retrying forever, do not fall back to AP
     }
     
     if (WiFi.status() == WL_CONNECTED) {
