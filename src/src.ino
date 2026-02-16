@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.041"; // Bumped version for WiFi fix
+String currentVersion = "1.0.042"; // Bumped version for WiFi fix
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -179,6 +179,35 @@ void updateStatusLED() {
   } else {
     setLED(false, false, true); // Blue ON instead of Red
   }
+}
+
+// =====================================================
+// FACTORY RESET
+// =====================================================
+void factoryReset() {
+  Serial.println("FACTORY RESET TRIGGERED!");
+  
+  // Clear WiFi configuration
+  deviceConfigured = false; // Internal flag
+  Preferences wifiPrefs;
+  wifiPrefs.begin("wifi-config", false);
+  wifiPrefs.clear();
+  wifiPrefs.end();
+  
+  Serial.println("WiFi Configuration Cleared.");
+  
+  // Visual feedback: alternating Blue/Green for 3 seconds
+  for (int i = 0; i < 15; i++) {
+    setLED(false, false, true); // Blue ON
+    delay(100);
+    setLED(false, true, false); // Green ON
+    delay(100);
+  }
+  
+  setLED(false, false, false); // All OFF
+  Serial.println("Rebooting...");
+  delay(500);
+  ESP.restart();
 }
 
 // =====================================================
@@ -1062,6 +1091,65 @@ void setup()
       
       // Start sensor after OTA
       initVL53();
+
+      // ===============================================
+      // FACTORY RESET GESTURE WINDOW (15s)
+      // ===============================================
+      if (sensorInitialized) {
+        Serial.println("Factory Reset window open (15s)... Cover sensor 3x to reset.");
+        unsigned long windowStart = millis();
+        int gestureCount = 0;
+        bool isCurrentlyCovered = false;
+        unsigned long coverStartTime = 0;
+        unsigned long lastBlink = 0;
+        bool blinkState = false;
+
+        while (millis() - windowStart < 15000) {
+          // Slow blue blink (1Hz)
+          if (millis() - lastBlink > 500) {
+            blinkState = !blinkState;
+            setLED(false, false, blinkState);
+            lastBlink = millis();
+          }
+
+          if (myImager.isDataReady()) {
+            myImager.getRangingData(&measurementData);
+            
+            // Calculate average distance and active count
+            long sumDist = 0;
+            int count = 0;
+            for (int i = 0; i < 64; i++) {
+              if (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) {
+                sumDist += measurementData.distance_mm[i];
+                count++;
+              }
+            }
+            float avgDist = (count > 0) ? (float)sumDist / count : 4000.0f;
+
+            // "Covered" condition: all 64 zones see < 10mm
+            // Using count >= 60 as a robust threshold for "completely covered"
+            bool covered = (count >= 60 && avgDist < 15.0f); // Relaxed slightly to 15mm for robustness
+
+            if (covered && !isCurrentlyCovered) {
+              isCurrentlyCovered = true;
+              coverStartTime = millis();
+            } else if (!covered && isCurrentlyCovered) {
+              // Transition COVERED -> UNCOVERED
+              if (millis() - coverStartTime >= 300) {
+                gestureCount++;
+                Serial.printf("Gesture %d/3 detected!\n", gestureCount);
+                if (gestureCount >= 3) {
+                  factoryReset(); // This will reboot
+                }
+              }
+              isCurrentlyCovered = false;
+            }
+          }
+          delay(10);
+        }
+        Serial.println("Factory Reset window closed.");
+        setLED(false, false, false); // Reset LED after window
+      }
       
       // Setup MQTT
       mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
