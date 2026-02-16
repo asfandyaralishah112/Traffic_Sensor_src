@@ -146,19 +146,19 @@ uint16_t frameCount = 0;
 // =====================================================
 void setLED(bool r, bool g, bool b) {
   // Common Anode: LOW = ON, HIGH = OFF
-  digitalWrite(LED_RED, r ? LOW : HIGH);
+  digitalWrite(LED_RED, HIGH);
   digitalWrite(LED_GREEN, g ? LOW : HIGH);
   digitalWrite(LED_BLUE, b ? LOW : HIGH);
 }
 
 void updateStatusLED() {
   if (currentState == CALIBRATION_MODE) {
-    // Red blinking
+    // Blue blinking instead of Red
     static bool blink = false;
     static unsigned long lastBlink = 0;
     if (millis() - lastBlink > 500) {
       blink = !blink;
-      setLED(blink, false, false);
+      setLED(false, false, blink);
       lastBlink = millis();
     }
   } else if (currentState == PROVISIONING_AP) {
@@ -171,13 +171,13 @@ void updateStatusLED() {
       lastBlink = millis();
     }
   } else if (!sensorInitialized || currentState == ERROR_STATE) {
-    setLED(true, false, false); // Red ON
+    setLED(false, false, true); // Blue ON instead of Red
   } else if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
     setLED(false, true, false); // Green ON
   } else if (WiFi.status() == WL_CONNECTED) {
-    setLED(true, true, false); // Orange (Red+Green)
+    setLED(false, true, true); // Cyan (Green+Blue) instead of Orange
   } else {
-    setLED(true, false, false); // Red ON
+    setLED(false, false, true); // Blue ON instead of Red
   }
 }
 
