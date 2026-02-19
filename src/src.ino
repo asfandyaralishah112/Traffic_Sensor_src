@@ -40,6 +40,7 @@ String ble_name = "SmartCounter-UNCONFIGURED";
 String wifi_ssid = "";
 String wifi_pass = "";
 String business_name = "";
+String screen_id = "";
 
 // ================= MQTT =================
 String mqtt_server = "www.cavlineglobal.com";
@@ -49,6 +50,7 @@ String mqtt_pass = "randompass";
 String topic_events, topic_status, topic_telemetry, topic_command;
 bool deviceConfigured = false;
 bool timeSynced = false;
+bool bootStatusSent = false; // Flag for one-time power-on status
 unsigned long lastTimeSyncMillis = 0; // For daily re-sync
 unsigned long dailySyncOffset = 0;    // Random jitter for fleet de-clustering
 bool bleStarted = false; // Flag to track BLE initialization state
@@ -280,6 +282,7 @@ void loadDeviceConfig() {
   // Also load WiFi/Business context to form the BLE name
   if (isWiFiConfigured()) {
     business_name = getStoredBusiness();
+    screen_id = getStoredScreenId();
   }
   
   updateDynamicNames();
@@ -724,6 +727,7 @@ void publishStatus(String status) {
   doc["version"] = currentVersion;
   doc["udp_sent"] = udpPacketsSent;
   doc["business"] = business_name; 
+  doc["screen_id"] = screen_id;
   
   char buffer[256];
   serializeJson(doc, buffer);
@@ -814,6 +818,21 @@ void mqttReconnect() {
       
       // Publish online status immediately
       publishStatus("online");
+
+      // Requirement: Power-cycle one-time status (UID, Business, Screen Id)
+      if (!bootStatusSent) {
+          StaticJsonDocument<256> bootDoc;
+          bootDoc["device_uid"] = DEVICE_UID;
+          bootDoc["business"] = business_name;
+          bootDoc["screen_id"] = screen_id;
+          bootDoc["event"] = "power_on";
+          
+          char bootBuffer[256];
+          serializeJson(bootDoc, bootBuffer);
+          mqttClient.publish(topic_status.c_str(), bootBuffer);
+          bootStatusSent = true;
+          Serial.println("Power-on status published.");
+      }
       
       // Subscribe to command topic
       mqttClient.subscribe(topic_command.c_str());
@@ -847,6 +866,7 @@ void publishBufferedEvents() {
     doc["timestamp"] = ev.timestamp;
     doc["direction"] = ev.direction;
     doc["business"] = business_name; // v1.0.042
+    doc["screen_id"] = screen_id;
 
     char buffer[256];
     serializeJson(doc, buffer);
@@ -1146,9 +1166,11 @@ void setup()
     wifi_ssid = getStoredSSID();
     wifi_pass = getStoredPass();
     business_name = getStoredBusiness();
+    screen_id = getStoredScreenId();
     
     Serial.print("Connecting to: "); Serial.println(wifi_ssid);
     Serial.print("Business: "); Serial.println(business_name);
+    Serial.print("Screen Id: "); Serial.println(screen_id);
     
     Serial.println("Connecting WiFi...");
     currentState = WIFI_CONNECT;

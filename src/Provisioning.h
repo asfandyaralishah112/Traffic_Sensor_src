@@ -218,6 +218,9 @@ const char index_html_tail[] PROGMEM = R"rawliteral(
                     <label>Business Name</label>
                     <input type="text" name="business_name" placeholder="My Business">
 
+                    <label>Screen Id</label>
+                    <input type="text" name="screen_id" placeholder="Screen-01">
+
                     <button type="submit" class="btn-primary">
                         Save Configuration
                     </button>
@@ -268,6 +271,13 @@ String getStoredBusiness() {
     String b = wifiPrefs.getString("business_name", "");
     wifiPrefs.end();
     return b;
+}
+
+String getStoredScreenId() {
+    wifiPrefs.begin("wifi-config", true);
+    String s = wifiPrefs.getString("screen_id", "");
+    wifiPrefs.end();
+    return s;
 }
 
 // Handler for Root URL
@@ -327,12 +337,14 @@ void handleSave() {
     String ssid = webServer.arg("ssid");
     String password = webServer.arg("password");
     String business_name = webServer.arg("business_name");
+    String screen_id = webServer.arg("screen_id");
     
     if (ssid.length() > 0) {
         wifiPrefs.begin("wifi-config", false);
         wifiPrefs.putString("ssid", ssid);
         wifiPrefs.putString("password", password);
         wifiPrefs.putString("business_name", business_name);
+        wifiPrefs.putString("screen_id", screen_id);
         wifiPrefs.putBool("configured", true);
         wifiPrefs.end();
         
