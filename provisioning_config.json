@@ -1,5 +1,5 @@
 {
-    "Start UID": "CVL-TS1-26-000002",
+    "Start UID": "CVL-TS1-26-000003",
     "COM Port": "COM3",
     "MQTT Server": "192.168.3.10",
     "MQTT Port": "1883"

@@ -11,14 +11,16 @@ import time
 from PIL import Image, ImageTk
 from openpyxl import Workbook, load_workbook
 from datetime import datetime
+import sys
 
 CONFIG_FILE = "provisioning_config.json"
 EXCEL_FILE = "device_registry.xlsx"
 
 FIRMWARE_DIR = r"src\build\esp32.esp32.esp32c6"
-BOOTLOADER = os.path.join(FIRMWARE_DIR, "bootloader.bin")
-PARTITIONS = os.path.join(FIRMWARE_DIR, "partitions.bin")
-FIRMWARE = os.path.join(FIRMWARE_DIR, "src.ino.bin")
+
+BOOTLOADER = os.path.join(FIRMWARE_DIR, "src.ino.bootloader.bin")
+PARTITIONS = os.path.join(FIRMWARE_DIR, "src.ino.partitions.bin")
+FIRMWARE   = os.path.join(FIRMWARE_DIR, "src.ino.bin")
 
 MAX_RETRIES = 5
 
@@ -144,7 +146,9 @@ class ProvisionTool:
         self.set_progress(10)
 
         command = [
-            "esptool.py",
+            sys.executable,
+            "-m",
+            "esptool",
             "--chip", "esp32c6",
             "--port", port,
             "--baud", "921600",

@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.043"; // Bumped version for Factory Reset Redesign
+String currentVersion = "1.0.044"; // Bumped version for Factory Reset Redesign
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
