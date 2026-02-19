@@ -201,7 +201,7 @@ const char index_html_head[] PROGMEM = R"rawliteral(
                 <form action="/save" method="POST">
 
                     <label>WiFi Network</label>
-                    <select name="ssid">
+                    <select name="ssid" required>
 )rawliteral";
 
 // HTML footer part after SSID options
@@ -213,13 +213,13 @@ const char index_html_tail[] PROGMEM = R"rawliteral(
                     </button>
 
                     <label>Password</label>
-                    <input type="password" name="password" placeholder="WiFi Password">
+                    <input type="password" name="password" placeholder="WiFi Password" required>
 
                     <label>Business Name</label>
-                    <input type="text" name="business_name" placeholder="My Business">
+                    <input type="text" name="business_name" placeholder="My Business" required>
 
                     <label>Screen Id</label>
-                    <input type="text" name="screen_id" placeholder="Screen-01">
+                    <input type="text" name="screen_id" placeholder="Screen-01" required>
 
                     <button type="submit" class="btn-primary">
                         Save Configuration
@@ -339,7 +339,7 @@ void handleSave() {
     String business_name = webServer.arg("business_name");
     String screen_id = webServer.arg("screen_id");
     
-    if (ssid.length() > 0) {
+    if (ssid.length() > 0 && password.length() > 0 && business_name.length() > 0 && screen_id.length() > 0) {
         wifiPrefs.begin("wifi-config", false);
         wifiPrefs.putString("ssid", ssid);
         wifiPrefs.putString("password", password);
@@ -360,7 +360,7 @@ void handleSave() {
         delay(1000);
         ESP.restart();
     } else {
-        webServer.send(200, "text/plain", "Error: SSID required");
+        webServer.send(200, "text/plain", "Error: All fields (SSID, Password, Business Name, Screen Id) are required");
     }
 }
 

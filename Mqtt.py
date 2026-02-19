@@ -9,7 +9,7 @@ from datetime import datetime
 MQTT_BROKER = "192.168.3.10"
 MQTT_PORT = 1883
 MQTT_USER = "CVL-TS1-26-000001"
-MQTT_PASS = "bEkbtc8Ued8y"
+MQTT_PASS = "5FwF6dZFSKm6"
 
 DEVICE_UID = "CVL-TS1-26-000001"
 
