@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.045"; // Bumped version for Factory Reset Redesign
+String currentVersion = "1.0.046"; // Bumped version for Factory Reset Redesign
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -179,7 +179,7 @@ void updateStatusLED() {
   } else if (WiFi.status() == WL_CONNECTED) {
     setLED(false, true, true); // Cyan (Green+Blue) instead of Orange
   } else {
-    setLED(false, false, true); // Blue ON instead of Red
+    setLED(false, true, true); // Cyan (Green+Blue) instead of Blue/Red
   }
 }
 
@@ -1056,7 +1056,7 @@ void setup()
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
-  setLED(false, false, false); // All OFF (High)
+  setLED(false, true, true); // Blue + Green ON (Cyan)
 
   // Load calibration from NVS
   loadCalibration();
@@ -1157,7 +1157,7 @@ void setup()
     }
 
     Serial.println("Factory reset check complete.");
-    setLED(false, false, false); // All OFF
+    setLED(false, true, true); // Maintain Cyan
   }
 
   // WiFi Configuration logic
