@@ -32,10 +32,14 @@ class ProvisionTool:
         self.root.title("Cavline Global - Factory Tool")
         self.root.geometry("580x700")
         self.root.configure(bg="#071218")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.create_ui()
         self.refresh_ports()
         self.load_config()
+
+        self.serial_conn = None
+        self.monitoring = False
 
     # ==================================================
     # UI
@@ -89,6 +93,11 @@ class ProvisionTool:
                    text="Refresh Ports",
                    command=self.refresh_ports).grid(row=1, column=2, padx=10)
 
+        self.port_btn = ttk.Button(form,
+                                   text="Open Port",
+                                   command=self.toggle_port)
+        self.port_btn.grid(row=1, column=3, padx=5)
+
         self.upload_btn = tk.Button(container,
                                     text="FLASH + PROVISION",
                                     command=self.start_thread,
@@ -125,6 +134,54 @@ class ProvisionTool:
     def set_progress(self, value):
         self.progress["value"] = value
         self.root.update_idletasks()
+
+    # ==================================================
+    # Serial Monitor
+    # ==================================================
+    def toggle_port(self):
+        if self.serial_conn and self.serial_conn.is_open:
+            self.stop_monitoring()
+        else:
+            self.start_monitoring()
+
+    def start_monitoring(self):
+        port = self.entries["COM Port"].get()
+        if not port:
+            messagebox.showerror("Error", "COM Port required")
+            return
+
+        try:
+            self.serial_conn = serial.Serial(port, 115200, timeout=0.1)
+            self.monitoring = True
+            self.port_btn.config(text="Close Port")
+            self.log(f"--- Port {port} Opened ---")
+            threading.Thread(target=self.monitor_loop, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open port: {e}")
+
+    def stop_monitoring(self):
+        self.monitoring = False
+        if self.serial_conn:
+            self.serial_conn.close()
+        self.port_btn.config(text="Open Port")
+        self.log("--- Port Closed ---")
+
+    def on_close(self):
+        self.stop_monitoring()
+        self.root.destroy()
+
+    def monitor_loop(self):
+        while self.monitoring:
+            if self.serial_conn and self.serial_conn.is_open:
+                try:
+                    if self.serial_conn.in_waiting:
+                        line = self.serial_conn.readline().decode(errors='replace').strip()
+                        if line:
+                            self.log(f"RX: {line}")
+                except Exception as e:
+                    self.log(f"--- Read Error: {e} ---")
+                    break
+            time.sleep(0.01)
 
     # ==================================================
     # COM Ports
@@ -195,9 +252,11 @@ class ProvisionTool:
                 time.sleep(1)
                 ser.reset_input_buffer()
 
-                ser.write((json.dumps(payload) + "\n").encode())
+                raw_payload = (json.dumps(payload) + "\n").encode()
+                self.log(f"TX: {raw_payload.decode().strip()}")
+                ser.write(raw_payload)
 
-                response = ser.readline().decode().strip()
+                response = ser.readline().decode(errors='replace').strip()
                 ser.close()
 
                 if response == "OK":
@@ -220,7 +279,7 @@ class ProvisionTool:
         threading.Thread(target=self.provision).start()
 
     def provision(self):
-
+        self.stop_monitoring()
         self.progress["value"] = 0
         self.output.delete("1.0", tk.END)
 
@@ -283,8 +342,18 @@ class ProvisionTool:
         return f"{prefix}-{new_number}"
 
     def generate_password(self, length=12):
-        chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-        return ''.join(random.choice(chars) for _ in range(length))
+        digits = "23456789"
+        chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        all_chars = chars + digits
+        
+        # Ensure at least one digit
+        password = [random.choice(digits)]
+        # Fill the rest
+        password += [random.choice(all_chars) for _ in range(length - 1)]
+        # Shuffle to avoid predictable position
+        random.shuffle(password)
+        
+        return ''.join(password)
 
     def log_to_excel(self, uid, user, password, server):
         now = datetime.now()

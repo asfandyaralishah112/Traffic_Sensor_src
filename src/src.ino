@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.047"; // Bumped version for HiveMQ SSL support
+String currentVersion = "1.0.048"; // Bumped version for HiveMQ SSL support
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -48,6 +48,7 @@ int mqtt_port = 0;
 String mqtt_user = "Traffic_Sensor";
 String mqtt_pass = "randompass";
 String topic_events, topic_status, topic_telemetry, topic_command;
+bool mqttTelemetryEnabled = false; // Flag to easily enable/disable MQTT telemetry stream
 bool deviceConfigured = false;
 bool timeSynced = false;
 bool bootStatusSent = false; // Flag for one-time power-on status
@@ -758,7 +759,7 @@ void publishTelemetry() {
   size_t len = serializeJson(doc, buffer);
   
   // Publish to MQTT
-  if (mqttClient.connected()) {
+  if (mqttTelemetryEnabled && mqttClient.connected()) {
     mqttClient.publish(topic_telemetry.c_str(), buffer);
   }
 

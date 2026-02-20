@@ -1,6 +1,6 @@
 {
-    "Start UID": "CVL-TS1-26-000001",
+    "Start UID": "CVL-TS1-26-000002",
     "COM Port": "COM3",
-    "MQTT Server": "192.168.3.10",
-    "MQTT Port": "1883"
+    "MQTT Server": "db4e59e7f86a44c983d9421fafb04bcd.s1.eu.hivemq.cloud",
+    "MQTT Port": "8883"
 }
