@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.046"; // Bumped version for Factory Reset Redesign
+String currentVersion = "1.0.047"; // Bumped version for HiveMQ SSL support
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -138,7 +138,7 @@ uint16_t filteredDist[64]; // v1.0.026: Filtered distances based on target statu
 
 WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient; 
-PubSubClient mqttClient(wifiClient);
+PubSubClient mqttClient; // Dynamically assigned in setup/reconnect
 
 uint32_t lastPrint = 0;
 uint16_t frameCount = 0;
@@ -805,6 +805,16 @@ void mqttReconnect() {
   if (millis() - lastConnectAttempt > 5000) {
     lastConnectAttempt = millis();
     Serial.print("Attempting MQTT connection...");
+    
+    // Choose client based on port
+    if (mqtt_port == 8883) {
+      wifiClientSecure.setInsecure(); // Standard for many IoT setups without managed CA
+      mqttClient.setClient(wifiClientSecure);
+      Serial.print(" (Secure) ");
+    } else {
+      mqttClient.setClient(wifiClient);
+    }
+    
     if (mqttClient.connect(
           DEVICE_UID.c_str(), 
           mqtt_user.c_str(), 
@@ -1212,6 +1222,12 @@ void setup()
 
       // Setup MQTT
       mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
+      if (mqtt_port == 8883) {
+        wifiClientSecure.setInsecure();
+        mqttClient.setClient(wifiClientSecure);
+      } else {
+        mqttClient.setClient(wifiClient);
+      }
       mqttClient.setCallback(mqttCallback);
       mqttClient.setBufferSize(1024);
       
