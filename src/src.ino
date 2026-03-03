@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.049";
+String currentVersion = "1.0.050";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -156,14 +156,10 @@ void setLED(bool r, bool g, bool b) {
 
 void updateStatusLED() {
   if (currentState == CALIBRATION_MODE) {
-    // Blue blinking instead of Red
-    static bool blink = false;
-    static unsigned long lastBlink = 0;
-    if (millis() - lastBlink > 500) {
-      blink = !blink;
-      setLED(false, false, blink);
-      lastBlink = millis();
-    }
+    // Blue Heartbeat Blink
+    unsigned long m = millis() % 1000;
+    bool blink = (m < 100) || (m > 250 && m < 350);
+    setLED(false, false, blink);
   } else if (currentState == PROVISIONING_AP) {
     // Blue Blinking for AP Mode
     static bool blink = false;
@@ -1180,6 +1176,18 @@ void setup()
 
     Serial.println("Factory reset check complete.");
     setLED(false, true, true); // Maintain Cyan
+  }
+
+  // Check for auto-calibration request from Provisioning
+  Preferences calCheck;
+  calCheck.begin("wifi-config", false);
+  if (calCheck.getBool("pending_cal", false)) {
+    Serial.println("Auto-Calibration Triggered after Provisioning...");
+    calCheck.putBool("pending_cal", false);
+    calCheck.end();
+    runCalibration();
+  } else {
+    calCheck.end();
   }
 
   // WiFi Configuration logic

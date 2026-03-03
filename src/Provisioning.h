@@ -346,6 +346,7 @@ void handleSave() {
         wifiPrefs.putString("business_name", business_name);
         wifiPrefs.putString("screen_id", screen_id);
         wifiPrefs.putBool("configured", true);
+        wifiPrefs.putBool("pending_cal", true);
         wifiPrefs.end();
         
         String html = "<!DOCTYPE html><html><body style='background:#071218;color:#e6eef3;font-family:sans-serif;text-align:center;padding-top:50px;'>";

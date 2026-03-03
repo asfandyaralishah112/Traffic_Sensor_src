@@ -9,6 +9,7 @@ import queue
 import paho.mqtt.client as mqtt
 import tkinter as tk
 from tkinter import ttk, messagebox
+import time
 
 # =========================
 # CONFIG & PERSISTENCE
@@ -16,14 +17,14 @@ from tkinter import ttk, messagebox
 CONFIG_FILE = "plot_config.json"
 
 DEFAULT_CONFIG = {
-    "broker": "www.cavlineglobal.com",
-    "port": 1883,
+    "broker": "db4e59e7f86a44c983d9421fafb04bcd.s1.eu.hivemq.cloud",
+    "port": 8883,
     "user": "Traffic_Sensor",
     "password": "randompass",
     "uid": "CVL-TS1-26-000001"
 }
 
-# Tracking Constants
+# Tracking & Calibration Constants
 MIN_ACTIVE_PIXELS = 1
 BASELINE_ALPHA = 0.001
 NOISE_ALPHA = 0.01
@@ -31,11 +32,16 @@ NOISE_MULTIPLIER = 2.0
 DOOR_LINE = 3.5
 MAX_CONSECUTIVE_MISSES = 3
 
+CALIBRATION_FILE = "plot_calibration.json"
+STABILIZATION_TIME = 10
+ANALYSIS_TIME = 15
+REFINEMENT_TIME = 15
+
 class SensorPlotterApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Cavline Global - Traffic Sensor Visualizer")
-        self.root.geometry("1000x700")
+        self.root.geometry("1000x850")
         
         self.data_queue = queue.Queue()
         self.mqtt_client = None
@@ -54,7 +60,19 @@ class SensorPlotterApp:
         
         self.setup_ui()
         self.load_settings()
+        self.load_calibration()
         self.setup_plot()
+        
+        # Window Close Handler
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Software Calibration State
+        self.cal_state = "IDLE"
+        self.cal_start_time = 0
+        self.cal_sum_dist = np.zeros((8, 8))
+        self.cal_sum_sq_dist = np.zeros((8, 8))
+        self.cal_counts = np.zeros((8, 8))
+        self.zone_mask = np.zeros((8, 8)) # 0: Valid, 1: Blocked, 2: Unusable
         
     def setup_ui(self):
         # Main Layout
@@ -95,6 +113,11 @@ class SensorPlotterApp:
         self.telemetry_btn.pack(fill="x", pady=5)
         self.telemetry_state = False
         
+        ttk.Button(self.sidebar, text="Hardware Calibrate", command=self.send_hardware_calibrate).pack(fill="x", pady=5)
+        ttk.Button(self.sidebar, text="Software Calibrate", command=self.start_software_calibrate).pack(fill="x", pady=5)
+        
+        ttk.Button(self.sidebar, text="OTA Check", command=self.send_ota_check).pack(fill="x", pady=5)
+        
         ttk.Button(self.sidebar, text="Reset Baseline", command=self.reset_baseline).pack(fill="x", pady=5)
         ttk.Button(self.sidebar, text="Clear Counts", command=self.clear_counts).pack(fill="x", pady=5)
         
@@ -107,7 +130,7 @@ class SensorPlotterApp:
         self.out_label.pack(pady=5)
         
         self.info_label = ttk.Label(self.sidebar, text="Status: Disconnected", foreground="red")
-        self.info_label.pack(side="bottom", pady=10)
+        self.info_label.pack(side="bottom", pady=5)
 
         # --- Plot Area ---
         self.plot_container = ttk.Frame(self.main_pane, padding=10)
@@ -142,6 +165,28 @@ class SensorPlotterApp:
         config = {key: entry.get() for key, entry in self.entries.items()}
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
+
+    def load_calibration(self):
+        if os.path.exists(CALIBRATION_FILE):
+            try:
+                with open(CALIBRATION_FILE, 'r') as f:
+                    cal = json.load(f)
+                    self.baseline = np.array(cal["baseline"])
+                    self.noise = np.array(cal["noise"])
+                    self.zone_mask = np.array(cal["zone_mask"])
+                    print("Calibration loaded from local file")
+            except Exception as e:
+                print(f"Error loading calibration: {e}")
+
+    def save_calibration(self):
+        cal = {
+            "baseline": self.baseline.tolist(),
+            "noise": self.noise.tolist(),
+            "zone_mask": self.zone_mask.tolist()
+        }
+        with open(CALIBRATION_FILE, 'w') as f:
+            json.dump(cal, f, indent=4)
+        print("Calibration saved to local file")
 
     def toggle_connection(self):
         if not self.is_connected:
@@ -217,9 +262,53 @@ class SensorPlotterApp:
         self.telemetry_btn.config(text=f"Telemetry: {state_str}")
         print(f"Sent {state_str} to {topic}")
 
+    def send_hardware_calibrate(self):
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Connect to MQTT first")
+            return
+        if not messagebox.askyesno("Confirm", "Start HARDWARE Calibration? This reboots the sensor."):
+            return
+        uid = self.entries["uid"].get()
+        topic = f"cavline/traffic_sensor/{uid}/command"
+        payload = json.dumps({"command": "calibrate"})
+        self.mqtt_client.publish(topic, payload)
+        print(f"Sent 'calibrate' to {topic}")
+
+    def send_ota_check(self):
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Connect to MQTT first")
+            return
+        uid = self.entries["uid"].get()
+        topic = f"cavline/traffic_sensor/{uid}/command"
+        payload = json.dumps({"command": "update"})
+        self.mqtt_client.publish(topic, payload)
+        print(f"Sent 'update' (OTA Check) to {topic}")
+
+    def start_software_calibrate(self):
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Connect to MQTT first")
+            return
+        if not messagebox.askyesno("Confirm", "Start SOFTWARE Calibration? This takes 45 seconds of clear-path data."):
+            return
+        
+        self.cal_state = "STABILIZING"
+        self.cal_start_time = time.time()
+        self.cal_sum_dist.fill(0)
+        self.cal_sum_sq_dist.fill(0)
+        self.cal_counts.fill(0)
+        print("Software Calibration Started: STABILIZING...")
+
     def reset_baseline(self):
         self.baseline = None
         print("Baseline reset requested")
+
+    def on_closing(self):
+        """Cleanly handle application exit to prevent terminal hang."""
+        if self.is_connected and self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+        self.root.destroy()
+        os._exit(0) # Forcefully kill any remaining threads
 
     def clear_counts(self):
         self.total_in = 0
@@ -237,7 +326,73 @@ class SensorPlotterApp:
             grid = zones.reshape((8, 8))
             self.grid_img.set_data(grid)
             
-            # Processing Logic (Ported from Plot1.py)
+            now = time.time()
+            
+            # --- Software Calibration State Machine ---
+            if self.cal_state != "IDLE":
+                elapsed = now - self.cal_start_time
+                
+                if self.cal_state == "STABILIZING":
+                    if elapsed >= STABILIZATION_TIME:
+                        self.cal_state = "ANALYZING"
+                        print("Calibration: Transition to ANALYZING...")
+                        
+                elif self.cal_state == "ANALYZING":
+                    valid_pixels = grid < 4000
+                    self.cal_sum_dist[valid_pixels] += grid[valid_pixels]
+                    self.cal_sum_sq_dist[valid_pixels] += grid[valid_pixels]**2
+                    self.cal_counts[valid_pixels] += 1
+                    
+                    if elapsed >= (STABILIZATION_TIME + ANALYSIS_TIME):
+                        # Calculate results
+                        self.baseline = np.zeros((8, 8))
+                        self.zone_mask = np.zeros((8, 8))
+                        for y in range(8):
+                            for x in range(8):
+                                count = self.cal_counts[y, x]
+                                if count > 0:
+                                    mean = self.cal_sum_dist[y, x] / count
+                                    variance = (self.cal_sum_sq_dist[y, x] / count) - (mean**2)
+                                    
+                                    if variance > 1000:
+                                        self.zone_mask[y, x] = 2 # UNUSABLE
+                                    elif mean < 500:
+                                        self.zone_mask[y, x] = 1 # BLOCKED
+                                    else:
+                                        self.zone_mask[y, x] = 0 # VALID
+                                        self.baseline[y, x] = mean
+                                else:
+                                    self.zone_mask[y, x] = 2
+                        
+                        self.cal_state = "REFINING"
+                        print("Calibration: Transition to REFINING...")
+                        
+                elif self.cal_state == "REFINING":
+                    valid = self.zone_mask == 0
+                    self.baseline[valid] = self.baseline[valid] * 0.9 + grid[valid] * 0.1
+                    
+                    if elapsed >= (STABILIZATION_TIME + ANALYSIS_TIME + REFINEMENT_TIME):
+                        # Finalize Noise
+                        self.noise = np.zeros((8, 8))
+                        for y in range(8):
+                            for x in range(8):
+                                if self.zone_mask[y, x] == 0:
+                                    count = self.cal_counts[y, x]
+                                    mean = self.cal_sum_dist[y, x] / count
+                                    variance = (self.cal_sum_sq_dist[y, x] / count) - (mean**2)
+                                    self.noise[y, x] = max(20, np.sqrt(max(0, variance)))
+                                else:
+                                    self.noise[y, x] = 50
+                        
+                        self.save_calibration()
+                        self.cal_state = "IDLE"
+                        messagebox.showinfo("Calibration", "Software Calibration Complete!")
+                
+                # Update UI Title during calibration
+                self.ax.set_title(f"CALIBRATING: {self.cal_state} ({int(elapsed)}s)")
+                continue # Skip tracking during calibration
+            
+            # Processing Logic
             if self.baseline is None:
                 self.baseline = grid.astype(float)
                 self.noise = np.ones((8, 8)) * 50
@@ -246,7 +401,9 @@ class SensorPlotterApp:
             diff = self.baseline - grid
             abs_err = np.abs(diff)
             threshold = self.noise * NOISE_MULTIPLIER
-            occupied = diff > threshold
+            
+            # Use zone_mask: only process Valid (0) zones
+            occupied = (diff > threshold) & (self.zone_mask == 0)
             occupied[0:2, :] = False
             
             # Dilation logic
