@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.048"; // Bumped version for HiveMQ SSL support
+String currentVersion = "1.0.049";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -796,6 +796,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     otaRequested = true;
     Serial.println("OTA Update Requested via MQTT");
+  } else if (command == "telemetry") {
+    String state = doc["state"].as<String>();
+    if (state == "ON") {
+      mqttTelemetryEnabled = true;
+      Serial.println("MQTT Telemetry Enabled");
+    } else if (state == "OFF") {
+      mqttTelemetryEnabled = false;
+      Serial.println("MQTT Telemetry Disabled");
+    }
+    // Optional: publish status back to confirm
+    publishStatus(mqttTelemetryEnabled ? "telemetry_on" : "telemetry_off");
   }
 }
 
