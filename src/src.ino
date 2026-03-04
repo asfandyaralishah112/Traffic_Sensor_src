@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.051";
+String currentVersion = "1.0.052";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -656,9 +656,9 @@ void processFlow() {
          // Traversal Check
          if (trajectoryLength >= 5) { // Match len(trajectory) > 5
             if (firstCentroidY > DOOR_LINE && lastCentroidY < DOOR_LINE && reachedExitZone) {
-               recordEvent("IN");
-            } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
                recordEvent("OUT");
+            } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
+               recordEvent("IN");
             }
          }
          Serial.println("Motion Ended");
@@ -827,7 +827,7 @@ void mqttReconnect() {
           topic_status.c_str(), 
           1, 
           true, 
-          "{\"status\":\"offline\"}"
+          "{\"status\":\"online\"}"
         )) {
       Serial.println("connected");
       

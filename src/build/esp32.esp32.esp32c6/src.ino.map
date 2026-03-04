@@ -65955,78 +65955,79 @@ LOAD C:/Users/asfan/AppData/Local/Arduino15/packages/esp32/tools/esp-rv32/2511/b
                 0x42130120                        _flash_rodata_start = ABSOLUTE (.)
  *(EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .rodata EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .rodata.* EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .sdata2 EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .sdata2.* EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .srodata EXCLUDE_FILE(*libspi_flash.a:spi_flash_wrap.* *libspi_flash.a:spi_flash_chip_winbond.* *libspi_flash.a:spi_flash_chip_th.* *libspi_flash.a:spi_flash_chip_mxic.* *libspi_flash.a:spi_flash_chip_issi.* *libspi_flash.a:spi_flash_chip_generic.* *libspi_flash.a:spi_flash_chip_gd.* *libspi_flash.a:spi_flash_chip_boya.* *libspi_flash.a:memspi_host_driver.* *libspi_flash.a:flash_brownout_hook.* *libsoc.a:temperature_sensor_periph.* *libsoc.a:lldesc.* *libnewlib.a:stdatomic.* *libnewlib.a:heap.* *libnewlib.a:assert.* *libnewlib.a:abort.* *liblog.a:util.* *liblog.a:log_timestamp_common.* *liblog.a:log_print.* *liblog.a:log_lock.* *liblog.a:log_format_text.* *liblog.a:log.* *libhal.a:spi_flash_hal_iram.* *libhal.a:spi_flash_hal_gpspi.* *libhal.a:spi_flash_encrypt_hal_iram.* *libhal.a:pmu_hal.* *libhal.a:mmu_hal.* *libhal.a:ledc_hal_iram.* *libhal.a:i2c_hal_iram.* *libhal.a:cache_hal.* *libgcc.a:save-restore.* *libgcc.a:_divsf3.* *libesp_system.a:ubsan.* *libesp_system.a:image_process.* *libesp_system.a:esp_err.* *libesp_rom.a:esp_rom_wdt.* *libesp_rom.a:esp_rom_tlsf.* *libesp_rom.a:esp_rom_systimer.* *libesp_rom.a:esp_rom_sys.* *libesp_rom.a:esp_rom_spiflash.* *libesp_rom.a:esp_rom_print.* *libesp_mm.a:esp_cache_utils.* *libesp_mm.a:esp_cache_msync.* *libesp_hw_support.a:systimer.* *libesp_hw_support.a:sleep_mspi.* *libesp_hw_support.a:sleep_console.* *libesp_hw_support.a:rtc_clk.* *libesp_hw_support.a:pmu_sleep.* *libesp_hw_support.a:mspi_timing_tuning.* *libesp_hw_support.a:esp_memory_utils.* *libesp_hw_support.a:clk_utils.* *libclang_rt.builtins.a:save.* *libclang_rt.builtins.a:restore.* *libclang_rt.builtins.a:_divsf3.* *libapp_trace.a:port_uart.* *libapp_trace.a:app_trace_util.* *libapp_trace.a:app_trace.* *libphy.a *libgcov.a) .srodata.*)
  .rodata._Z19handleCaptivePortalv.str1.4
-                0x42130120    0x1b550 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x42130120    0x1b54c C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
                                 0x182 (size before relaxing)
  .rodata._Z10handleRootv.str1.4
-                0x4214b670       0x4e C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x4e C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z10handleSavev.str1.4
-                0x4214b670      0x192 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c      0x192 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z12factoryResetv.str1.4
-                0x4214b670       0x45 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x45 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z15saveCalibrationv.str1.4
-                0x4214b670       0x45 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x45 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z15loadCalibrationv.str1.4
-                0x4214b670       0x48 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x48 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z18updateDynamicNamesv.str1.4
-                0x4214b670       0x1a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x1a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z16updateMqttTopicsv.str1.4
-                0x4214b670       0x70 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x70 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z16loadDeviceConfigv.str1.4
-                0x4214b670       0xb3 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xb3 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z19startBLEAdvertisingv.str1.4
-                0x4214b670       0x3a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x3a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z25correctBufferedTimestampsv.str1.4
-                0x4214b670       0x22 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x22 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z11recordEvent6String.str1.4
-                0x4214b670       0x47 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x47 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z11processFlowv.str1.4
-                0x4214b670       0x35 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x35 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._ZN11ArduinoJson8V742PB226detail13TextFormatterINS1_18StaticStringWriterEE11writeStringEPKcj.str1.4
-                0x4214b670       0x1b C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x1b C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._ZN11ArduinoJson8V742PB226detail13TextFormatterINS1_18StaticStringWriterEE10writeFloatEda.str1.4
-                0x4214b670        0x5 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c        0x5 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._ZNK11ArduinoJson8V742PB226detail11VariantData6acceptINS1_14JsonSerializerINS1_18StaticStringWriterEEEEENT_11result_typeERS7_PKNS1_15ResourceManagerE.str1.4
-                0x4214b670        0xe C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c        0xe C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z21publishBufferedEventsv.str1.4
-                0x4214b670       0x6a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x6a C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z13publishStatus6String.str1.4
-                0x4214b670       0x3e C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x3e C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z8syncTimev.str1.4
-                0x4214b670       0x7f C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x7f C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z14runCalibrationv.str1.4
-                0x4214b670       0xf0 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xf0 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z8initVL53v.str1.4
-                0x4214b670       0x49 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x49 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z13mqttReconnectv.str1.4
-                0x4214b670       0xbc C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xb8 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z11checkForOTAv.str1.4
-                0x4214b670      0x139 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c      0x139 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z12mqttCallbackPcPhj.str1.4
-                0x4214b670       0xf0 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xf0 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._GLOBAL__sub_I_currentVersion.str1.4
-                0x4214b670       0xb1 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xb1 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z17setupProvisioning6String.str1.4
-                0x4214b670       0xf4 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xf4 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z24handleSerialProvisioningv.str1.4
-                0x4214b670       0xd2 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0xd2 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z16publishTelemetryv.str1.4
-                0x4214b670       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z4loopv.str1.4
-                0x4214b670       0x3d C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c       0x3d C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._Z5setupv.str1.4
-                0x4214b670      0x1ac C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c      0x1ac C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
  .rodata._ZTVN11ArduinoJson8V742PB226detail16DefaultAllocatorE
-                0x4214b670       0x14 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
-                0x4214b670                vtable for ArduinoJson::V742PB22::detail::DefaultAllocator
+                0x4214b66c       0x14 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b66c                vtable for ArduinoJson::V742PB22::detail::DefaultAllocator
  .rodata._ZTV3Uri
-                0x4214b684       0x1c C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
-                0x4214b684                vtable for Uri
+                0x4214b680       0x1c C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b680                vtable for Uri
  .rodata._ZZN11ArduinoJson8V742PB226detail11FloatTraitsIfLj4EE25negativeBinaryPowersOfTenEvE7factors
-                0x4214b6a0       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
-                0x4214b6a0                ArduinoJson::V742PB22::detail::FloatTraits<float, 4u>::negativeBinaryPowersOfTen()::factors
+                0x4214b69c       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b69c                ArduinoJson::V742PB22::detail::FloatTraits<float, 4u>::negativeBinaryPowersOfTen()::factors
  .rodata._ZZN11ArduinoJson8V742PB226detail11FloatTraitsIfLj4EE25positiveBinaryPowersOfTenEvE7factors
-                0x4214b6b8       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
-                0x4214b6b8                ArduinoJson::V742PB22::detail::FloatTraits<float, 4u>::positiveBinaryPowersOfTen()::factors
+                0x4214b6b4       0x18 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
+                0x4214b6b4                ArduinoJson::V742PB22::detail::FloatTraits<float, 4u>::positiveBinaryPowersOfTen()::factors
+ *fill*         0x4214b6cc        0x4 
  .rodata._ZZN11ArduinoJson8V742PB226detail11FloatTraitsIdLj8EE25negativeBinaryPowersOfTenEvE7factors
                 0x4214b6d0       0x48 C:\Users\asfan\AppData\Local\arduino\sketches\89147608C0F653216E0AB394C00B3E81\sketch\src.ino.cpp.o
                 0x4214b6d0                ArduinoJson::V742PB22::detail::FloatTraits<double, 8u>::negativeBinaryPowersOfTen()::factors

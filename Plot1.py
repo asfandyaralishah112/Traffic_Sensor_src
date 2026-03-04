@@ -17,7 +17,7 @@ import time
 CONFIG_FILE = "plot_config.json"
 
 DEFAULT_CONFIG = {
-    "broker": "af6c6b1cb2344c0f8f248e053a117476.s1.eu.hivemq.cloud",
+    "broker": "af6e6b1eb2344e0f8f248e053a117476.s1.eu.hivemq.cloud",
     "port": 8883,
     "user": "Cavline_Sensors",
     "password": "Cav@364!",
@@ -445,9 +445,9 @@ class SensorPlotterApp:
                     if self.tracking_active and len(self.trajectory) > 5:
                         start, end = self.trajectory[0], self.trajectory[-1]
                         if start > DOOR_LINE and end < DOOR_LINE:
-                            self.total_in += 1
-                        elif start < DOOR_LINE and end > DOOR_LINE:
                             self.total_out += 1
+                        elif start < DOOR_LINE and end > DOOR_LINE:
+                            self.total_in += 1
                         
                         self.in_label.config(text=f"IN: {self.total_in}")
                         self.out_label.config(text=f"OUT: {self.total_out}")
