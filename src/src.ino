@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.050";
+String currentVersion = "1.0.051";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -43,10 +43,10 @@ String business_name = "";
 String screen_id = "";
 
 // ================= MQTT =================
-String mqtt_server = "www.cavlineglobal.com";
-int mqtt_port = 0;
-String mqtt_user = "Traffic_Sensor";
-String mqtt_pass = "randompass";
+String mqtt_server = "af6e6b1eb2344e0f8f248e053a117476.s1.eu.hivemq.cloud";
+int mqtt_port = 8883;
+String mqtt_user = "Cavline_Sensors";
+String mqtt_pass = "Cav@364!";
 String topic_events, topic_status, topic_telemetry, topic_command;
 bool mqttTelemetryEnabled = false; // Flag to easily enable/disable MQTT telemetry stream
 bool deviceConfigured = false;
@@ -265,11 +265,8 @@ void loadDeviceConfig() {
   deviceConfigured = devicePrefs.getBool("configured", false);
   if (deviceConfigured) {
     DEVICE_UID = devicePrefs.getString("uid", "UNCONFIGURED");
-    mqtt_server = devicePrefs.getString("mqtt_server", mqtt_server);
-    mqtt_port = devicePrefs.getUInt("mqtt_port", mqtt_port);
-    mqtt_user = devicePrefs.getString("mqtt_user", mqtt_user);
-    mqtt_pass = devicePrefs.getString("mqtt_pass", mqtt_pass);
-    Serial.println("Device configuration loaded from NVS");
+    // MQTT configuration is now hardcoded for fleet scalability
+    Serial.println("Device UID loaded from NVS. MQTT using hardcoded cluster config.");
   } else {
     Serial.println("No factory device configuration found.");
     DEVICE_UID = "UNCONFIGURED";

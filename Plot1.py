@@ -17,10 +17,10 @@ import time
 CONFIG_FILE = "plot_config.json"
 
 DEFAULT_CONFIG = {
-    "broker": "db4e59e7f86a44c983d9421fafb04bcd.s1.eu.hivemq.cloud",
+    "broker": "af6c6b1cb2344c0f8f248e053a117476.s1.eu.hivemq.cloud",
     "port": 8883,
-    "user": "Traffic_Sensor",
-    "password": "randompass",
+    "user": "Cavline_Sensors",
+    "password": "Cav@364!",
     "uid": "CVL-TS1-26-000001"
 }
 
