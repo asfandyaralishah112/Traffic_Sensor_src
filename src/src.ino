@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.052";
+String currentVersion = "1.0.053";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -1109,13 +1109,13 @@ void setup()
         for (int i = 0; i < 64; i++) {
           uint16_t d = measurementData.distance_mm[i];
           // Close distance OR invalid return indicates obstruction
-          if (d < 80 || measurementData.target_status[i] == 0) {
+          if (d < 40 || measurementData.target_status[i] == 0) {
             coveredPixels++;
           }
         }
 
-        // Stage 1 Trigger: ANY coverage (40 out of 64 pixels)
-        if (coveredPixels >= 64) {
+        // Stage 1 Trigger: ANY coverage (62 out of 64 pixels)
+        if (coveredPixels >= 62) {
           stage2Entered = true;
           break;
         }
@@ -1145,11 +1145,11 @@ void setup()
           int coveredPixels = 0;
           for (int i = 0; i < 64; i++) {
             uint16_t d = measurementData.distance_mm[i];
-            if (d < 20 || measurementData.target_status[i] == 0) {
+            if (d < 40 || measurementData.target_status[i] == 0) {
               coveredPixels++;
             }
           }
-          bool covered = (coveredPixels >= 64);
+          bool covered = (coveredPixels >= 62);
 
           // Temporal Debounce for Stage 2 cancellation (400ms)
           if (covered) {
