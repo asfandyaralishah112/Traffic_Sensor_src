@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.053";
+String currentVersion = "1.0.054";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -800,6 +800,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     // Optional: publish status back to confirm
     publishStatus(mqttTelemetryEnabled ? "telemetry_on" : "telemetry_off");
+  } else if (command == "reset") {
+    Serial.println("Remote Factory Reset Requested via MQTT");
+    factoryReset();
   }
 }
 
@@ -1109,13 +1112,13 @@ void setup()
         for (int i = 0; i < 64; i++) {
           uint16_t d = measurementData.distance_mm[i];
           // Close distance OR invalid return indicates obstruction
-          if (d < 40 || measurementData.target_status[i] == 0) {
+          if (d < 80 || measurementData.target_status[i] == 0) {
             coveredPixels++;
           }
         }
 
-        // Stage 1 Trigger: ANY coverage (62 out of 64 pixels)
-        if (coveredPixels >= 62) {
+        // Stage 1 Trigger: ANY coverage (60 out of 64 pixels)
+        if (coveredPixels >= 60) {
           stage2Entered = true;
           break;
         }
@@ -1145,11 +1148,11 @@ void setup()
           int coveredPixels = 0;
           for (int i = 0; i < 64; i++) {
             uint16_t d = measurementData.distance_mm[i];
-            if (d < 40 || measurementData.target_status[i] == 0) {
+            if (d < 80 || measurementData.target_status[i] == 0) {
               coveredPixels++;
             }
           }
-          bool covered = (coveredPixels >= 62);
+          bool covered = (coveredPixels >= 60);
 
           // Temporal Debounce for Stage 2 cancellation (400ms)
           if (covered) {

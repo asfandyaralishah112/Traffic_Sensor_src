@@ -121,6 +121,11 @@ class SensorPlotterApp:
         ttk.Button(self.sidebar, text="Reset Baseline", command=self.reset_baseline).pack(fill="x", pady=5)
         ttk.Button(self.sidebar, text="Clear Counts", command=self.clear_counts).pack(fill="x", pady=5)
         
+        # Factory Reset with warning style
+        style = ttk.Style()
+        style.configure("Warning.TButton", foreground="red")
+        ttk.Button(self.sidebar, text="FACTORY RESET", command=self.send_factory_reset, style="Warning.TButton").pack(fill="x", pady=20)
+        
         ttk.Separator(self.sidebar, orient="horizontal").pack(fill="x", pady=20)
         
         self.in_label = ttk.Label(self.sidebar, text="IN: 0", font=("Arial", 20, "bold"), foreground="#2f9e44")
@@ -283,6 +288,26 @@ class SensorPlotterApp:
         payload = json.dumps({"command": "update"})
         self.mqtt_client.publish(topic, payload)
         print(f"Sent 'update' (OTA Check) to {topic}")
+
+    def send_factory_reset(self):
+        if not self.is_connected:
+            messagebox.showwarning("Warning", "Connect to MQTT first")
+            return
+            
+        confirm = messagebox.askyesno(
+            "CRITICAL WARNING", 
+            "This will WIPE all WiFi and business settings from the sensor and reboot it.\n\n"
+            "The sensor will enter Provisioning Mode (AP) after reboot.\n\n"
+            "Are you absolutely sure you want to perform a FACTORY RESET?"
+        )
+        
+        if confirm:
+            uid = self.entries["uid"].get()
+            topic = f"cavline/traffic_sensor/{uid}/command"
+            payload = json.dumps({"command": "reset"})
+            self.mqtt_client.publish(topic, payload)
+            print(f"Sent 'reset' (Factory Reset) to {topic}")
+            messagebox.showinfo("Success", f"Factory Reset command sent to {uid}")
 
     def start_software_calibrate(self):
         if not self.is_connected:
