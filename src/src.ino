@@ -14,7 +14,7 @@
 #include <time.h>
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.054";
+String currentVersion = "1.0.055";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -41,6 +41,7 @@ String wifi_ssid = "";
 String wifi_pass = "";
 String business_name = "";
 String screen_id = "";
+int customer_count = 100;
 
 // ================= MQTT =================
 String mqtt_server = "af6e6b1eb2344e0f8f248e053a117476.s1.eu.hivemq.cloud";
@@ -277,6 +278,7 @@ void loadDeviceConfig() {
   if (isWiFiConfigured()) {
     business_name = getStoredBusiness();
     screen_id = getStoredScreenId();
+    customer_count = getStoredCustomerCount();
   }
   
   updateDynamicNames();
@@ -722,6 +724,7 @@ void publishStatus(String status) {
   doc["udp_sent"] = udpPacketsSent;
   doc["business"] = business_name; 
   doc["screen_id"] = screen_id;
+  doc["customer_count"] = customer_count;
   
   char buffer[256];
   serializeJson(doc, buffer);
@@ -803,6 +806,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   } else if (command == "reset") {
     Serial.println("Remote Factory Reset Requested via MQTT");
     factoryReset();
+  } else if (command == "get_customers") {
+    Serial.println("Customer count report requested via MQTT");
+    publishStatus("customer_count_report");
   }
 }
 

@@ -221,6 +221,9 @@ const char index_html_tail[] PROGMEM = R"rawliteral(
                     <label>Screen Id</label>
                     <input type="text" name="screen_id" placeholder="Screen-01" required>
 
+                    <label>Number of Customers</label>
+                    <input type="number" name="customers" placeholder="100" required>
+
                     <button type="submit" class="btn-primary">
                         Save Configuration
                     </button>
@@ -278,6 +281,13 @@ String getStoredScreenId() {
     String s = wifiPrefs.getString("screen_id", "");
     wifiPrefs.end();
     return s;
+}
+
+int getStoredCustomerCount() {
+    wifiPrefs.begin("wifi-config", true);
+    int c = wifiPrefs.getInt("customers", 100);
+    wifiPrefs.end();
+    return c;
 }
 
 // Handler for Root URL
@@ -338,6 +348,9 @@ void handleSave() {
     String password = webServer.arg("password");
     String business_name = webServer.arg("business_name");
     String screen_id = webServer.arg("screen_id");
+    String customers_str = webServer.arg("customers");
+    int customers = customers_str.toInt();
+    if (customers <= 0) customers = 100; // Default if invalid
     
     if (ssid.length() > 0 && password.length() > 0 && business_name.length() > 0 && screen_id.length() > 0) {
         wifiPrefs.begin("wifi-config", false);
@@ -345,6 +358,7 @@ void handleSave() {
         wifiPrefs.putString("password", password);
         wifiPrefs.putString("business_name", business_name);
         wifiPrefs.putString("screen_id", screen_id);
+        wifiPrefs.putInt("customers", customers);
         wifiPrefs.putBool("configured", true);
         wifiPrefs.putBool("pending_cal", true);
         wifiPrefs.end();

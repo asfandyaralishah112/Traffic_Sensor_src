@@ -41,7 +41,7 @@ class SensorPlotterApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Cavline Global - Traffic Sensor Dashboard")
-        self.root.geometry("1000x850")
+        self.root.geometry("1000x950")
         
         self.data_queue = queue.Queue()
         self.mqtt_client = None
@@ -137,6 +137,14 @@ class SensorPlotterApp:
         self.info_label = ttk.Label(self.sidebar, text="Status: Disconnected", foreground="red")
         self.info_label.pack(side="bottom", pady=5)
 
+        ttk.Separator(self.sidebar, orient="horizontal").pack(fill="x", pady=10)
+        
+        self.capacity_label = ttk.Label(self.sidebar, text="Business Capacity: N/A", font=("Arial", 12, "bold"))
+        self.capacity_label.pack(pady=5)
+        
+        self.refresh_cap_btn = ttk.Button(self.sidebar, text="Refresh Capacity", command=self.send_get_customers, state="disabled")
+        self.refresh_cap_btn.pack(fill="x", pady=5)
+
         # --- Plot Area ---
         self.plot_container = ttk.Frame(self.main_pane, padding=10)
         self.main_pane.add(self.plot_container, weight=4)
@@ -227,6 +235,7 @@ class SensorPlotterApp:
             self.conn_btn.config(text="Disconnect")
             self.info_label.config(text="Status: Connected", foreground="green")
             self.telemetry_btn.config(state="normal")
+            self.refresh_cap_btn.config(state="normal")
         except Exception as e:
             messagebox.showerror("Connection Error", str(e))
 
@@ -238,22 +247,52 @@ class SensorPlotterApp:
         self.conn_btn.config(text="Connect")
         self.info_label.config(text="Status: Disconnected", foreground="red")
         self.telemetry_btn.config(state="disabled")
+        self.refresh_cap_btn.config(state="disabled")
 
     def on_connect(self, client, userdata, flags, rc):
         uid = self.entries["uid"].get()
-        topic = f"cavline/traffic_sensor/{uid}/telemetry"
-        client.subscribe(topic)
-        print(f"Subscribed to {topic}")
+        # Subscribe to telemetry
+        tele_topic = f"cavline/traffic_sensor/{uid}/telemetry"
+        client.subscribe(tele_topic)
+        print(f"Subscribed to {tele_topic}")
+        
+        # Subscribe to status for capacity reports
+        status_topic = f"cavline/traffic_sensor/{uid}/status"
+        client.subscribe(status_topic)
+        print(f"Subscribed to {status_topic}")
+        
+        # Auto-request capacity on connect
+        self.send_get_customers()
 
     def on_message(self, client, userdata, msg):
         try:
             payload = json.loads(msg.payload.decode())
-            if "zones" in payload:
+            uid = self.entries["uid"].get()
+            
+            # Handle Telemetry
+            if msg.topic.endswith("/telemetry") and "zones" in payload:
                 if self.data_queue.qsize() > 5:
                     self.data_queue.get_nowait()
                 self.data_queue.put(payload)
+            
+            # Handle Status/Capacity
+            elif msg.topic.endswith("/status"):
+                if "customer_count" in payload:
+                    count = payload["customer_count"]
+                    self.capacity_label.config(text=f"Business Capacity: {count}")
+                    print(f"Capacity Update: {count}")
+                
         except Exception as e:
             print(f"MQTT msg error: {e}")
+
+    def send_get_customers(self):
+        if not self.is_connected:
+            return
+        uid = self.entries["uid"].get()
+        topic = f"cavline/traffic_sensor/{uid}/command"
+        payload = json.dumps({"command": "get_customers"})
+        self.mqtt_client.publish(topic, payload)
+        print(f"Sent 'get_customers' to {topic}")
 
     def toggle_telemetry(self):
         uid = self.entries["uid"].get()
