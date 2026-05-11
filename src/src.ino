@@ -1,7 +1,4 @@
-#include <Wire.h>
-#include <SparkFun_VL53L5CX_Library.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
@@ -13,18 +10,17 @@
 #include <BLEAdvertising.h>
 #include <time.h>
 
+// ================= WIFI & PROVISIONING =================
+#include "Provisioning.h"
+
+
 // ================= OTA & VERSION =================
-String currentVersion = "1.0.055";
+String currentVersion = "1.1.055";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
 void publishStatus(String status);
 void publishTelemetry();
-void runCalibration();
-void initVL53();
-void saveCalibration();
-void loadCalibration();
-void updateAdaptiveBaseline();
 void processFlow();
 void updateStatusLED();
 void setLED(bool r, bool g, bool b);
@@ -35,8 +31,8 @@ void correctBufferedTimestamps();
 String DEVICE_UID = "UNCONFIGURED";
 String ble_name = "SmartCounter-UNCONFIGURED";
 
-// ================= WIFI & PROVISIONING =================
-#include "Provisioning.h"
+
+
 String wifi_ssid = "";
 String wifi_pass = "";
 String business_name = "";
@@ -57,23 +53,23 @@ unsigned long lastTimeSyncMillis = 0; // For daily re-sync
 unsigned long dailySyncOffset = 0;    // Random jitter for fleet de-clustering
 bool bleStarted = false; // Flag to track BLE initialization state
 
-// ================= UDP TELEMETRY =================
-bool udpStreamEnabled = false; // Flag to easily enable/disable UDP stream
-const char* udp_server = "192.168.3.10";
-const int udp_port = 5005;
-WiFiUDP udpClient;
-uint32_t udpPacketsSent = 0;
+
+
 
 // ================= GPIO =================
-#define SDA_PIN 6
-#define SCL_PIN 7
-#define PIN_LPN 0
-#define PIN_RST 8
-#define PIN_CALIBRATION 9
+// TX_PIN removed - Only detection mode active
+
+#define ADC1_PIN 6   // Sensor 1
+#define ADC2_PIN 7   // Sensor 2
+
 
 #define LED_RED   23
 #define LED_GREEN 22
 #define LED_BLUE  21
+
+#define PIR_PIN   5
+#define SENSOR_PWR_PIN 1 // Powers the phototransistors (High = ON)
+#define SLEEP_DELAY_MS 30000 // 30 seconds of inactivity before deep sleep
 
 // ================= SYSTEM STATES =================
 enum SystemState {
@@ -89,54 +85,43 @@ enum SystemState {
 
 SystemState currentState = BOOT;
 
-// ================= CALIBRATION DATA =================
-struct CalibrationData {
-  uint8_t zone_mask[64];
-  uint16_t floor_distance[64];
-  uint16_t noise[64]; // v1.0.028: Adaptive noise floor
-};
-
-CalibrationData calData;
-Preferences preferences; // Calibration preferences
+Preferences preferences; // System preferences
 Preferences devicePrefs; // Factory provisioning preferences
-bool sensorInitialized = false;
+bool sensorInitialized = true; // Set true for phototransistor as it starts immediately
 
-// ================= REGION OCCUPANCY (v1.0.027: Calculated in processFlow) =================
-int activePixels = 0;
 
-// ================= TRAJECTORY TRACKING (v1.0.041: Exact Parity with Plot1.py) =================
-#define MIN_ACTIVE_PIXELS 1
-#define DOOR_LINE 3.5
-#define MAX_CONSECUTIVE_MISSES 3
 
-float firstCentroidY = 0;
-float lastCentroidY = 0;
-float lastVelocityY = 0;       // v1.0.041: For prediction
-int trajectoryLength = 0;      // v1.0.041: Replaces motionFrameCount for length check
-int consecutiveMisses = 0;     // v1.0.041: Robustness against dropouts
 
-bool reachedEntranceZone = false; 
-bool reachedExitZone = false;     
-bool trackingActive = false;
+// ================= BEAM SENSING VARIABLES =================
+float vref = 3.3;
+int adc_max = 4095;
+float TH_HIGH = 1.5;
+float TH_LOW  = 0.8;
+
+bool beam1_active = false;
+bool beam2_active = false;
+
+// State Machine for Direction
+enum DetectionState { IDLE, B1_HIT, BOTH_HIT, B2_HIT };
+DetectionState detectionState = IDLE;
 
 volatile bool otaRequested = false;
 unsigned long lastTelemetry = 0; // v1.0.027: unified timing
 
 // ================= EVENT BUFFER =================
 struct CounterEvent {
-  String direction;
+  char direction[8];
   time_t timestamp;
   bool timestampValid;
 };
 
 #define MAX_BUFFERED_EVENTS 100
-CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
-int eventCount = 0;
+RTC_DATA_ATTR CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
+RTC_DATA_ATTR int eventCount = 0;
 
-// ================= VL53 =================
-SparkFun_VL53L5CX myImager;
-VL53L5CX_ResultsData measurementData;
-uint16_t filteredDist[64]; // v1.0.026: Filtered distances based on target status
+uint16_t beamFreq1 = 0;
+uint16_t beamFreq2 = 0;
+
 
 WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient; 
@@ -144,6 +129,11 @@ PubSubClient mqttClient; // Dynamically assigned in setup/reconnect
 
 uint32_t lastPrint = 0;
 uint16_t frameCount = 0;
+unsigned long lastActivityTime = 0;
+bool wokeFromSleep = false;
+bool networkingRequested = false;
+int connectionRetries = 0;
+bool otaChecked = false;
 
 // =====================================================
 // LED CONTROL
@@ -213,32 +203,8 @@ void factoryReset() {
 // =====================================================
 // NVS PERSISTENCE
 // =====================================================
-void saveCalibration() {
-  preferences.begin("counter-cal", false);
-  preferences.putBytes("zone_mask", calData.zone_mask, 64);
-  preferences.putBytes("floor_dist", calData.floor_distance, 128); // 64 * 2
-  preferences.putBytes("noise", calData.noise, 128); // 64 * 2
-  preferences.end();
-  Serial.println("Calibration saved to NVS");
-}
+// Removed calibration NVS functions as per migration to phototransistor
 
-void loadCalibration() {
-  preferences.begin("counter-cal", true);
-  if (preferences.isKey("zone_mask") && preferences.isKey("noise")) {
-    preferences.getBytes("zone_mask", calData.zone_mask, 64);
-    preferences.getBytes("floor_dist", calData.floor_distance, 128);
-    preferences.getBytes("noise", calData.noise, 128);
-    Serial.println("Calibration loaded from NVS");
-  } else {
-    Serial.println("No calibration found in NVS, using defaults");
-    memset(calData.zone_mask, 0, 64); // Default: all zones valid
-    for(int i=0; i<64; i++) {
-        calData.floor_distance[i] = 4000;
-        calData.noise[i] = 50; 
-    }
-  }
-  preferences.end();
-}
 
 void updateDynamicNames() {
   // BLE name logic: EXACTLY the business_name if available
@@ -407,133 +373,15 @@ void handleSerialProvisioning() {
 // =====================================================
 // CALIBRATION MODE
 // =====================================================
-void runCalibration() {
-  Serial.println("Starting Calibration...");
-  publishStatus("calibration_started");
-  currentState = CALIBRATION_MODE;
-  
-  // Step 1: Stabilization (10 seconds)
-  Serial.println("Step 1: Stabilization...");
-  unsigned long start = millis();
-  while (millis() - start < 10000) {
-    if (myImager.isDataReady()) myImager.getRangingData(&measurementData);
-    updateStatusLED();
-    delay(10);
-  }
+// Removed runCalibration and trigger logic
 
-  // Step 2: Zone Analysis (15 seconds)
-  Serial.println("Step 2: Zone Analysis...");
-  float sum_dist[64] = {0};
-  float sum_sq_dist[64] = {0};
-  int counts[64] = {0};
-  
-  start = millis();
-  while (millis() - start < 15000) {
-    if (myImager.isDataReady()) {
-      myImager.getRangingData(&measurementData);
-      for (int i = 0; i < 64; i++) {
-        if (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) {
-          sum_dist[i] += measurementData.distance_mm[i];
-          sum_sq_dist[i] += pow(measurementData.distance_mm[i], 2);
-          counts[i]++;
-        }
-      }
-    }
-    updateStatusLED();
-    delay(10);
-  }
-
-  for (int i = 0; i < 64; i++) {
-    if (counts[i] > 0) {
-      float mean = sum_dist[i] / counts[i];
-      float variance = (sum_sq_dist[i] / counts[i]) - pow(mean, 2);
-      
-      if (variance > 1000) { // arbitrary threshold for noise
-        calData.zone_mask[i] = 2; // UNUSABLE
-      } else if (mean < 500) { // arbitrary threshold for blocked
-        calData.zone_mask[i] = 1; // STATIC_BLOCKED
-      } else {
-        calData.zone_mask[i] = 0; // VALID_WALK (0 is used as valid here)
-        calData.floor_distance[i] = (uint16_t)mean;
-      }
-    } else {
-      calData.zone_mask[i] = 2; // UNUSABLE
-    }
-  }
-
-  // Step 3: Floor Distance Measurement (15 seconds)
-  Serial.println("Step 3: Floor Distance Measurement...");
-  start = millis();
-  while (millis() - start < 15000) {
-    if (myImager.isDataReady()) {
-      myImager.getRangingData(&measurementData);
-      for (int i = 0; i < 64; i++) {
-        if (calData.zone_mask[i] == 0 && (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9)) {
-          // Running average for floor distance
-          calData.floor_distance[i] = (calData.floor_distance[i] * 0.9) + (measurementData.distance_mm[i] * 0.1);
-        }
-      }
-    }
-    updateStatusLED();
-    delay(10);
-  }
-
-  // Step 4: Noise Calculation
-  Serial.println("Step 4: Noise Calculation...");
-  for (int i = 0; i < 64; i++) {
-    if (calData.zone_mask[i] == 0 && counts[i] > 1) {
-      float mean = sum_dist[i] / counts[i];
-      float variance = (sum_sq_dist[i] / counts[i]) - pow(mean, 2);
-      calData.noise[i] = (uint16_t)sqrt(max(0.0f, variance));
-      if (calData.noise[i] < 20) calData.noise[i] = 20; // Floor at 20mm
-    } else {
-      calData.noise[i] = 50; // Default
-    }
-  }
-
-  saveCalibration();
-  Serial.println("Calibration Complete!");
-  publishStatus("calibration_completed");
-  currentState = NORMAL_OPERATION;
-  publishStatus("returning_to_normal");
-}
-
-void checkCalibrationTrigger() {
-  static unsigned long lowStart = 0;
-  if (digitalRead(PIN_CALIBRATION) == LOW) {
-    if (lowStart == 0) lowStart = millis();
-    if (millis() - lowStart > 5000) {
-      runCalibration();
-      lowStart = 0;
-    }
-  } else {
-    lowStart = 0;
-  }
-}
 // =====================================================
 // DETECTION LOGIC
 // =====================================================
 
 // v1.0.041: Dilation Helper
-void dilate(bool input[64], bool output[64]) {
-  memset(output, 0, 64 * sizeof(bool));
-  for (int i = 0; i < 64; i++) {
-    if (input[i]) {
-      int y = i / 8;
-      int x = i % 8;
-      // Mark self and neighbors
-      for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-          int ny = y + dy;
-          int nx = x + dx;
-          if (ny >= 0 && ny < 8 && nx >= 0 && nx < 8) {
-            output[ny * 8 + nx] = true;
-          }
-        }
-      }
-    }
-  }
-}
+// Removed dilation helper
+
 
 void recordEvent(String direction) {
   time_t t;
@@ -549,166 +397,34 @@ void recordEvent(String direction) {
   }
 
   if (eventCount < MAX_BUFFERED_EVENTS) {
-    eventBuffer[eventCount].direction = direction;
+    strncpy(eventBuffer[eventCount].direction, direction.c_str(), sizeof(eventBuffer[eventCount].direction) - 1);
+    eventBuffer[eventCount].direction[sizeof(eventBuffer[eventCount].direction) - 1] = '\0';
     eventBuffer[eventCount].timestamp = t;
     eventBuffer[eventCount].timestampValid = valid;
     eventCount++;
+    networkingRequested = true; // Trigger WiFi/MQTT connection on activity
     Serial.println("Event Recorded: " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
   } else {
     for (int i = 0; i < MAX_BUFFERED_EVENTS - 1; i++) {
       eventBuffer[i] = eventBuffer[i+1];
     }
-    eventBuffer[MAX_BUFFERED_EVENTS-1].direction = direction;
+    strncpy(eventBuffer[MAX_BUFFERED_EVENTS-1].direction, direction.c_str(), sizeof(eventBuffer[MAX_BUFFERED_EVENTS-1].direction) - 1);
+    eventBuffer[MAX_BUFFERED_EVENTS-1].direction[sizeof(eventBuffer[MAX_BUFFERED_EVENTS-1].direction) - 1] = '\0';
     eventBuffer[MAX_BUFFERED_EVENTS-1].timestamp = t;
     eventBuffer[MAX_BUFFERED_EVENTS-1].timestampValid = valid;
+    networkingRequested = true; // Trigger WiFi/MQTT connection on activity
     Serial.println("Event Recorded (Buffer Full): " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
   }
 }
 
-void processFlow() {
-  bool occupied[64] = {0};
-  bool dilated[64] = {0};
+// Old processFlow removed as part of phototransistor migration
 
-  // 1. Initial Thresholding
-  for (int i = 0; i < 64; i++) {
-    // Skip first two rows (consistency with Plot1.py)
-    if (i < 16) continue; 
-    
-    if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      float diff = (float)calData.floor_distance[i] - (float)filteredDist[i];
-      
-      float threshold = (float)calData.noise[i] * 2.0f; // v1.0.041: Matched Plot1.py (2.0)
-
-      if (diff > threshold) {
-        occupied[i] = true;
-      }
-    }
-  }
-
-  // 2. Dilation
-  dilate(occupied, dilated);
-
-  // v1.0.042: Match Python behavior: ignore first two rows after dilation
-  for (int i = 0; i < 16; i++) {
-    dilated[i] = false;
-  }
-
-  // 3. Centroid & Active Count
-  float sumY = 0;
-  int activeCount = 0;
-  for (int i = 0; i < 64; i++) {
-    if (dilated[i]) {
-      int row = i / 8;
-      sumY += (float)row;
-      activeCount++;
-    }
-  }
-
-  // 4. Tracking Logic
-  if (activeCount >= MIN_ACTIVE_PIXELS) {
-    float centroidY = sumY / (float)activeCount;
-    
-    if (trackingActive) {
-      // Smooth and Velocity
-      centroidY = 0.7f * lastCentroidY + 0.3f * centroidY;
-      lastVelocityY = centroidY - lastCentroidY;
-    } else {
-      // Start Tracking
-      trackingActive = true;
-      firstCentroidY = centroidY;
-      lastVelocityY = 0;
-      trajectoryLength = 0;
-      reachedEntranceZone = false; 
-      reachedExitZone = false;
-      Serial.println("Motion Started");
-    }
-
-    lastCentroidY = centroidY;
-    consecutiveMisses = 0;
-    trajectoryLength++;
-
-    // Traversal Update
-    if (centroidY > DOOR_LINE + 1.0f) reachedEntranceZone = true;
-    if (centroidY < DOOR_LINE - 1.0f) reachedExitZone = true;
-
-  } else {
-    // Inactive Frame
-    consecutiveMisses++;
-
-    if (trackingActive && consecutiveMisses <= MAX_CONSECUTIVE_MISSES) {
-      // Prediction Mode
-      float predicted = lastCentroidY + lastVelocityY;
-      
-      // v1.0.042: Clamp to valid VL53L5CX row range
-      if (predicted < 0.0f) predicted = 0.0f;
-      if (predicted > 7.0f) predicted = 7.0f;
-
-      lastCentroidY = predicted;
-      
-      // Update trajectory stats based on prediction
-      trajectoryLength++;
-      if (predicted > DOOR_LINE + 1.0f) reachedEntranceZone = true;
-      if (predicted < DOOR_LINE - 1.0f) reachedExitZone = true;
-      
-      Serial.println("Predicting..."); // Debug
-    } 
-    else {
-      // Stop / Tracking Lost
-      if (trackingActive) {
-         // Traversal Check
-         if (trajectoryLength >= 5) { // Match len(trajectory) > 5
-            if (firstCentroidY > DOOR_LINE && lastCentroidY < DOOR_LINE && reachedExitZone) {
-               recordEvent("OUT");
-            } else if (firstCentroidY < DOOR_LINE && lastCentroidY > DOOR_LINE && reachedEntranceZone) {
-               recordEvent("IN");
-            }
-         }
-         Serial.println("Motion Ended");
-      }
-      trackingActive = false;
-      trajectoryLength = 0;
-      consecutiveMisses = 0;
-      lastVelocityY = 0;
-    }
-  }
-  
-  activePixels = activeCount; // Update global for baseline logic
-}
 
 // =====================================================
 // ADAPTIVE CALIBRATION
 // =====================================================
-void updateAdaptiveBaseline() {
-  if (currentState != NORMAL_OPERATION) return;
-  if (trackingActive) return;
-  if (activePixels > 0) return;
+// Removed adaptive baseline logic
 
-  const float BASELINE_ALPHA = 0.001;
-  const float NOISE_ALPHA = 0.01;
-
-  for (int i = 0; i < 64; i++) {
-    if (calData.zone_mask[i] == 0) { // VALID_WALK_ZONE
-      uint16_t currentDist = filteredDist[i];
-      
-      // Plot1.py logic: Update baseline and noise when NOT occupied
-      // We already checked activePixels == 0, but we can be more specific per zone
-      
-      float diff = (float)calData.floor_distance[i] - (float)currentDist;
-      float abs_err = abs(diff);
-      
-      // Update Floor Distance (Baseline)
-      float newFloor = ((1.0f - BASELINE_ALPHA) * (float)calData.floor_distance[i]) + (BASELINE_ALPHA * (float)currentDist);
-      calData.floor_distance[i] = (uint16_t)newFloor;
-      
-      // Update Noise Floor
-      float newNoise = ((1.0f - NOISE_ALPHA) * (float)calData.noise[i]) + (NOISE_ALPHA * abs_err);
-      calData.noise[i] = (uint16_t)newNoise;
-      
-      // Clamp noise floor to avoid over-sensitivity
-      if (calData.noise[i] < 20) calData.noise[i] = 20;
-    }
-  }
-}
 
 // =====================================================
 // MQTT FUNCTIONS
@@ -721,7 +437,6 @@ void publishStatus(String status) {
   doc["device_uid"] = DEVICE_UID;
   doc["status"] = status;
   doc["version"] = currentVersion;
-  doc["udp_sent"] = udpPacketsSent;
   doc["business"] = business_name; 
   doc["screen_id"] = screen_id;
   doc["customer_count"] = customer_count;
@@ -730,45 +445,38 @@ void publishStatus(String status) {
   serializeJson(doc, buffer);
   mqttClient.publish(topic_status.c_str(), buffer);
   mqttClient.loop(); // Flush status message
-  Serial.println("Status Published: " + status + " | UDP Sent: " + String(udpPacketsSent));
+  Serial.println("Status Published: " + status);
 }
 
 void publishTelemetry() {
   if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
-  static unsigned long lastTelemetry = 0;
-  if (millis() - lastTelemetry < 50) return; // 20 FPS max for telemetry
-  lastTelemetry = millis();
+  static unsigned long lastTelemetryTime = 0;
+  if (millis() - lastTelemetryTime < 500) return; // 2 FPS for beam telemetry
+  lastTelemetryTime = millis();
 
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<512> doc;
   doc["device_uid"] = DEVICE_UID;
-  doc["state"] = trackingActive ? 1 : 0;
+  doc["state"] = (int)detectionState;
   
-  JsonArray zones = doc.createNestedArray("zones");
-  for (int i = 0; i < 64; i++) {
-    zones.add(filteredDist[i]);
-  }
+  JsonArray beams = doc.createNestedArray("beams");
+  beams.add(beamFreq1);
+  beams.add(beamFreq2);
   
-  // Requirement 8: Add UTC timestamp to telemetry if synced
+  JsonArray states = doc.createNestedArray("states");
+  states.add(beam1_active ? 1 : 0);
+  states.add(beam2_active ? 1 : 0);
+  
   if (timeSynced) doc["timestamp"] = (uint32_t)time(nullptr);
   
-  char buffer[1024];
+  char buffer[512];
   size_t len = serializeJson(doc, buffer);
   
   // Publish to MQTT
   if (mqttTelemetryEnabled && mqttClient.connected()) {
     mqttClient.publish(topic_telemetry.c_str(), buffer);
   }
-
-  if (udpStreamEnabled) {
-    udpClient.beginPacket(udp_server, udp_port);
-    udpClient.write((const uint8_t*)buffer, len);
-    if (udpClient.endPacket()) {
-      udpPacketsSent++;
-    } else {
-      Serial.println("UDP Packet Fail");
-    }
-  }
 }
+
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   StaticJsonDocument<256> doc;
@@ -779,20 +487,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 
   String command = doc["command"].as<String>();
-  if (command == "calibrate") {
-    if (currentState == CALIBRATION_MODE) {
-      Serial.println("Already in calibration mode, ignoring.");
-      return;
-    }
-    runCalibration();
-  } else if (command == "update") {
-    if (currentState == CALIBRATION_MODE || currentState == OTA_UPDATE) {
+  if (command == "update") {
+    if (currentState == OTA_UPDATE) {
       Serial.println("Busy, ignoring update command.");
       return;
     }
     otaRequested = true;
     Serial.println("OTA Update Requested via MQTT");
   } else if (command == "telemetry") {
+
     String state = doc["state"].as<String>();
     if (state == "ON") {
       mqttTelemetryEnabled = true;
@@ -896,7 +599,7 @@ void publishBufferedEvents() {
     serializeJson(doc, buffer);
 
     if (mqttClient.publish(topic_events.c_str(), buffer)) {
-      Serial.println("Published: " + ev.direction);
+      Serial.print("Published: "); Serial.println(ev.direction);
       // Remove from buffer (shift)
       for (int i = 0; i < eventCount - 1; i++) {
         eventBuffer[i] = eventBuffer[i+1];
@@ -1011,48 +714,26 @@ void checkForOTA()
 // =====================================================
 // VL53 INIT
 // =====================================================
-void initVL53()
-{
-  pinMode(PIN_LPN, OUTPUT);
-  pinMode(PIN_RST, OUTPUT);
+// Removed initVL53
 
-  digitalWrite(PIN_LPN, LOW);
-  digitalWrite(PIN_RST, HIGH);
-  delay(10);
 
-  digitalWrite(PIN_LPN, HIGH);
-  delay(10);
-
-  digitalWrite(PIN_RST, LOW);
-  delay(1000);
-
-  Wire.begin(SDA_PIN, SCL_PIN);
-
-  Serial.println("VL53L5CX init...");
-
-  if (!myImager.begin())
-  {
-    Serial.println("Sensor not found");
-    sensorInitialized = false;
-    currentState = ERROR_STATE;
-    publishStatus("error_state_entered");
-    return;
-  }
-
-  sensorInitialized = true;
-  myImager.setResolution(8 * 8); // Reverted to 8x8 v1.0.025
-  myImager.setRangingFrequency(15); // Max for 8x8 is 15Hz
-  myImager.setIntegrationTime(10); // v1.0.040: Improved sensitivity for shorter/small targets
+void goToSleep() {
+  Serial.println("\n--- Entering Deep Sleep ---");
+  // Turn off sensor power and LEDs
+  digitalWrite(SENSOR_PWR_PIN, LOW);
+  setLED(false, false, false);
   
-  // Optimization for faster recovery/floor detection (v1.0.022)
-  myImager.setRangingMode(SF_VL53L5CX_RANGING_MODE::CONTINUOUS); 
-  myImager.setTargetOrder(SF_VL53L5CX_TARGET_ORDER::STRONGEST);
-  myImager.setSharpenerPercent(5);       // Low sharpener to help distinguish targets
+  // Flush serial to ensure message is sent
+  Serial.flush();
   
-  myImager.startRanging();
-
-  Serial.println("Sensor ready");
+  // Configure wakeup: GPIO 4 (PIR) High
+  // Note: For ESP32-C6, ext1 is the primary wakeup source for GPIOs
+  uint64_t wakeup_mask = (1ULL << PIR_PIN);
+  esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+  
+  esp_deep_sleep_start();
 }
+
 
 // =====================================================
 // SETUP
@@ -1061,12 +742,40 @@ void setup()
 {
   Serial.begin(115200);
   delay(100);
+
+  // Initialize Sensor Power as early as possible
+  pinMode(SENSOR_PWR_PIN, OUTPUT);
+  digitalWrite(SENSOR_PWR_PIN, HIGH);
+
+  // Initialize PIR Pin
+  pinMode(PIR_PIN, INPUT); 
   
-  // OBJECTIVE 1: 5-second Factory Provisioning Window (SILENT for Python Tool)
-  unsigned long factoryStart = millis();
-  while (millis() - factoryStart < 5000) {
-    handleSerialProvisioning();
-    delay(5);
+  // Log wakeup reason
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println("Wakeup Source: PIR Motion Detected (Delayed Networking)");
+    wokeFromSleep = true;
+    networkingRequested = false; // Wait for valid activity
+  } else {
+    Serial.println("Wakeup Source: Power-on or Reset (Immediate Networking)");
+    wokeFromSleep = false;
+    networkingRequested = true; // Connect immediately for OTA/Status
+  }
+  lastActivityTime = millis();
+
+  // If we have buffered events from a previous session, trigger networking
+  if (eventCount > 0) {
+    Serial.printf("Found %d buffered events in RTC memory. Triggering upload...\n", eventCount);
+    networkingRequested = true;
+  }
+  
+  // OBJECTIVE 1: 5-second Factory Provisioning Window (Skip on Wakeup for instant detection)
+  if (!wokeFromSleep) {
+    unsigned long factoryStart = millis();
+    while (millis() - factoryStart < 5000) {
+      handleSerialProvisioning();
+      delay(5);
+    }
   }
 
   // OBJECTIVE 2 & 4: Load configurations from NVS
@@ -1076,196 +785,71 @@ void setup()
   dailySyncOffset = random(0, 3600000);
   
   // Initialize GPIOs
-  pinMode(PIN_CALIBRATION, INPUT_PULLUP);
+  // pinMode(TX_PIN, OUTPUT) removed - Only detection mode active
+
+  pinMode(ADC1_PIN, INPUT);
+  pinMode(ADC2_PIN, INPUT);
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
   setLED(false, true, true); // Blue + Green ON (Cyan)
 
-  // Load calibration from NVS
-  loadCalibration();
-  
-  // Start sensor for reset detection
-  initVL53();
+  // Start 1kHz tone for IR Emitters
+  // tone(TX_PIN, 1000) removed - Only detection mode active
+
+  analogReadResolution(12);
+  Serial.println("Dual Beam ADC Detection Mode Initialized");
 
   // v1.0.043: Init Success Signal - Cyan (Blue+Green ON)
   if (sensorInitialized) {
     setLED(false, true, true);
   }
 
-  // ===============================================
-  // TWO-STAGE FACTORY RESET GESTURE (Refined)
-  // ===============================================
-  if (sensorInitialized) {
-    Serial.println("Stage 1: Factory Reset Detection (15s)...");
-    unsigned long stage1Start = millis();
-    bool stage2Entered = false;
-    unsigned long lastBlink = 0;
-    bool blinkState = false;
 
-    // Stage 1: Detection Window (15s)
-    while (millis() - stage1Start < 15000) {
-      // 1Hz blue blink
-      if (millis() - lastBlink > 500) {
-        blinkState = !blinkState;
-        setLED(false, false, blinkState);
-        lastBlink = millis();
-      }
+  // Removed auto-calibration trigger
 
-      if (myImager.isDataReady()) {
-        myImager.getRangingData(&measurementData);
-        int coveredPixels = 0;
-        for (int i = 0; i < 64; i++) {
-          uint16_t d = measurementData.distance_mm[i];
-          // Close distance OR invalid return indicates obstruction
-          if (d < 80 || measurementData.target_status[i] == 0) {
-            coveredPixels++;
-          }
-        }
-
-        // Stage 1 Trigger: ANY coverage (60 out of 64 pixels)
-        if (coveredPixels >= 60) {
-          stage2Entered = true;
-          break;
-        }
-      }
-      delay(10);
-    }
-
-    if (stage2Entered) {
-      Serial.println("Stage 2: Continuous Cover Mode (15s)...");
-      unsigned long stage2Start = millis();
-      lastBlink = 0;
-      blinkState = false;
-
-      unsigned long uncoveredStart = 0;
-
-      // Stage 2: Continuous Coverage (15s)
-      while (millis() - stage2Start < 15000) {
-        // 2Hz blue blink
-        if (millis() - lastBlink > 250) {
-          blinkState = !blinkState;
-          setLED(false, false, blinkState);
-          lastBlink = millis();
-        }
-
-        if (myImager.isDataReady()) {
-          myImager.getRangingData(&measurementData);
-          int coveredPixels = 0;
-          for (int i = 0; i < 64; i++) {
-            uint16_t d = measurementData.distance_mm[i];
-            if (d < 80 || measurementData.target_status[i] == 0) {
-              coveredPixels++;
-            }
-          }
-          bool covered = (coveredPixels >= 60);
-
-          // Temporal Debounce for Stage 2 cancellation (400ms)
-          if (covered) {
-            uncoveredStart = 0;
-          } else {
-            if (uncoveredStart == 0) uncoveredStart = millis();
-            if (millis() - uncoveredStart > 400) {
-              Serial.println("Reset cancelled: Sensor uncovered for >400ms.");
-              stage2Entered = false;
-              break;
-            }
-          }
-        }
-        delay(10);
-      }
-
-      if (stage2Entered) {
-        factoryReset(); // Reboots device
-      }
-    }
-
-    Serial.println("Factory reset check complete.");
-    setLED(false, true, true); // Maintain Cyan
-  }
-
-  // Check for auto-calibration request from Provisioning
-  Preferences calCheck;
-  calCheck.begin("wifi-config", false);
-  if (calCheck.getBool("pending_cal", false)) {
-    Serial.println("Auto-Calibration Triggered after Provisioning...");
-    calCheck.putBool("pending_cal", false);
-    calCheck.end();
-    runCalibration();
-  } else {
-    calCheck.end();
-  }
 
   // WiFi Configuration logic
   if (isWiFiConfigured()) {
-    Serial.println("WiFi Config Found. Configuring...");
     wifi_ssid = getStoredSSID();
     wifi_pass = getStoredPass();
     business_name = getStoredBusiness();
     screen_id = getStoredScreenId();
-    
-    Serial.print("Connecting to: "); Serial.println(wifi_ssid);
-    Serial.print("Business: "); Serial.println(business_name);
-    Serial.print("Screen Id: "); Serial.println(screen_id);
-    
-    Serial.println("Connecting WiFi...");
-    currentState = WIFI_CONNECT;
-    
-    // v1.0.044: Full WiFi Reset for ESP32-C6 (Required after AP Mode)
-    WiFi.disconnect(true, true);
-    delay(500);
 
-    WiFi.mode(WIFI_OFF);
-    delay(500);
-
-    WiFi.mode(WIFI_STA);
-    delay(500);
-
-    WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
-    WiFi.setAutoReconnect(true);
-    WiFi.persistent(false); 
-
-    // Debug Mode Check
-    Serial.println("WiFi Mode After Reset:");
-    Serial.println(WiFi.getMode()); // Should be 1 (WIFI_STA)
-    
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-      updateStatusLED();
-      // Keep retrying forever, do not fall back to AP
+    // Configure MQTT Server once
+    mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
+    if (mqtt_port == 8883) {
+      wifiClientSecure.setInsecure();
+      mqttClient.setClient(wifiClientSecure);
+    } else {
+      mqttClient.setClient(wifiClient);
     }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi connected");
-      Serial.println(WiFi.localIP());
+    mqttClient.setCallback(mqttCallback);
+    mqttClient.setBufferSize(1024);
+
+    if (networkingRequested && !wokeFromSleep) {
+      Serial.println("First Boot: Connecting WiFi for OTA Check...");
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
       
-      // Requirement 9: WiFi -> NTP -> MQTT
-      syncTime();
-
-      // OTA check first
-      checkForOTA();
-
-      // Setup MQTT
-      mqttClient.setServer(mqtt_server.c_str(), mqtt_port);
-      if (mqtt_port == 8883) {
-        wifiClientSecure.setInsecure();
-        mqttClient.setClient(wifiClientSecure);
-      } else {
-        mqttClient.setClient(wifiClient);
+      unsigned long start = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+        delay(500);
+        Serial.print(".");
+        updateStatusLED();
       }
-      mqttClient.setCallback(mqttCallback);
-      mqttClient.setBufferSize(1024);
       
-      // Initialize UDP
-      udpClient.begin(udp_port);
-      Serial.printf("UDP Initialized on port %d\n", udp_port);
-      
-      // Start BLE Advertising
-      startBLEAdvertising();
-
-      currentState = NORMAL_OPERATION;
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi Connected");
+        syncTime();
+        checkForOTA();
+        otaChecked = true;
+        startBLEAdvertising();
+      } else {
+        connectionRetries++; // Count as a failed attempt
+      }
     }
+    currentState = NORMAL_OPERATION;
   } else {
     Serial.println("No Config Found. Starting Provisioning Mode...");
     currentState = PROVISIONING_AP;
@@ -1288,78 +872,229 @@ void loop()
   }
 
   // Handle Networking
-  static bool wasConnected = false;
-  bool nowConnected = (WiFi.status() == WL_CONNECTED);
+  if (networkingRequested) {
+    if (WiFi.status() != WL_CONNECTED && connectionRetries < 3) {
+      static unsigned long lastConnectAttempt = 0;
+      if (millis() - lastConnectAttempt > 15000) { // Try every 15s
+        Serial.printf("\nAttempting WiFi Connection (%d/3)...\n", connectionRetries + 1);
+        WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+        lastConnectAttempt = millis();
+        
+        // Brief wait to see if it connects immediately
+        unsigned long waitStart = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 5000) {
+          delay(100);
+          updateStatusLED();
+        }
+        
+        if (WiFi.status() != WL_CONNECTED) {
+          connectionRetries++;
+          if (connectionRetries >= 3) Serial.println("WiFi Connection Failed after 3 attempts.");
+        } else {
+          Serial.println("WiFi Connected");
+          syncTime();
+          if (!otaChecked) { checkForOTA(); otaChecked = true; }
+          startBLEAdvertising();
+        }
+      }
+    }
 
-  if (nowConnected && !wasConnected) {
-    Serial.println("WiFi reconnected, syncing time...");
-    syncTime();
-  }
-  wasConnected = nowConnected;
-
-  const unsigned long DAILY_SYNC_INTERVAL = 86400000UL; // 24 hours
-  // Requirement: Add random offset to prevent sync clustering in large fleets
-  if (nowConnected && (millis() - lastTimeSyncMillis > (DAILY_SYNC_INTERVAL + dailySyncOffset))) {
-    Serial.println("Daily time sync...");
-    syncTime();
-  }
-
-  if (!nowConnected) {
-    currentState = WIFI_CONNECT;
-    // We could add reconnection fallback logic here too if needed, 
-    // but typically we stay in loop trying to reconnect.
-    // The requirement was "If ESP cannot connect to stored WiFi within 60 seconds... return to AP mode".
-    // This is handled in Setup. If it loses connection mid-operation, it usually tries to reconnect.
-    // Adding 60s fallback here would be complex as it might trigger on transient loss.
-    // User requirement specifically mentioned "Boot Logic" and "Connection Failure Handling" under constraints.
-    // I implemented it in Setup.
-  } else if (!mqttClient.connected()) {
-    currentState = MQTT_CONNECT;
-    mqttReconnect();
-  } else {
-    mqttClient.loop();
-    publishBufferedEvents();
-    publishTelemetry();
+    if (WiFi.status() == WL_CONNECTED) {
+      if (!mqttClient.connected()) {
+        currentState = MQTT_CONNECT;
+        mqttReconnect();
+      } else {
+        mqttClient.loop();
+        publishBufferedEvents();
+        publishTelemetry();
+      }
+    }
   }
 
   updateStatusLED();
-  checkCalibrationTrigger();
 
   // Async OTA trigger
-  if (otaRequested && currentState != CALIBRATION_MODE && currentState != OTA_UPDATE) {
+  if (otaRequested && currentState != OTA_UPDATE) {
     otaRequested = false;
     checkForOTA();
   }
 
+  // =====================================================
+  // BEAM SAMPLING (Non-Blocking 100ms window)
+  // =====================================================
   if (currentState != CALIBRATION_MODE && currentState != PROVISIONING_AP) {
-    if (myImager.isDataReady())
-    {
-      myImager.getRangingData(&measurementData);
-      
-      // v1.0.026: Populating filtered distance layer
-      for (int i = 0; i < 64; i++) {
-        if (measurementData.target_status[i] == 5 || measurementData.target_status[i] == 9) {
-          filteredDist[i] = measurementData.distance_mm[i];
-        } else {
-          filteredDist[i] = 4000; // Treat as FAR distance
-        }
-      }
+    int edges1 = 0, edges2 = 0;
+    bool state1 = false, prev1 = false;
+    bool state2 = false, prev2 = false;
+    unsigned long start = millis();
 
-      processFlow();
-      updateAdaptiveBaseline();
-      
-      publishTelemetry(); // Share filtered grid over UDP
+    while (millis() - start < 20) { // 20ms window
+      // Sensor 1
+      int raw1 = analogRead(ADC1_PIN);
+      float v1 = (raw1 * vref) / adc_max;
+      if (!state1 && v1 > TH_HIGH) state1 = true;
+      else if (state1 && v1 < TH_LOW) state1 = false;
+      if (state1 && !prev1) edges1++;
+      prev1 = state1;
 
-      frameCount++;
-      if (millis() - lastPrint > 1000)
-      {
-        Serial.print("FPS:");
-        Serial.println(frameCount);
-        frameCount = 0;
-        lastPrint = millis();
-      }
+      // Sensor 2
+      int raw2 = analogRead(ADC2_PIN);
+      float v2 = (raw2 * vref) / adc_max;
+      if (!state2 && v2 > TH_HIGH) state2 = true;
+      else if (state2 && v2 < TH_LOW) state2 = false;
+      if (state2 && !prev2) edges2++;
+      prev2 = state2;
+      
+      delayMicroseconds(50); 
     }
+
+    beamFreq1 = edges1 * 50; // 20ms * 50 = 1s
+    beamFreq2 = edges2 * 50;
+
+    // Beam is "Active" (Clear) if frequency is near 1kHz
+    beam1_active = (beamFreq1 > 700 && beamFreq1 < 1500);
+    beam2_active = (beamFreq2 > 700 && beamFreq2 < 1500);
+
+    processFlow();
+    publishTelemetry();
+
+    if (millis() - lastPrint > 1000) {
+      Serial.print("S1: "); Serial.print(beamFreq1); Serial.print(beam1_active ? " OK" : " BLK");
+      Serial.print(" | S2: "); Serial.print(beamFreq2); Serial.println(beam2_active ? " OK" : " BLK");
+      lastPrint = millis();
+    }
+  }
+
+  // =====================================================
+  // SLEEP MANAGEMENT
+  // =====================================================
+  bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
+  
+  // Pending work: Have events to publish AND still have retries left OR already connected
+  bool hasPendingEvents = (eventCount > 0);
+  bool canStillConnect = (connectionRetries < 3);
+  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
+  
+  bool pendingWork = networkingRequested && hasPendingEvents && (canStillConnect || isConnected);
+
+  // Stay awake if motion or if we are actively trying to/succeeded in sending events
+  if (motionDetected || pendingWork || currentState != NORMAL_OPERATION) {
+    lastActivityTime = millis();
+  }
+
+  if (millis() - lastActivityTime > SLEEP_DELAY_MS) {
+    goToSleep();
   }
   
   delay(5); // Small delay to prevent watchdog issues
+}
+
+// =====================================================
+// DIRECTIONAL STATE MACHINE
+// =====================================================
+void processFlow() {
+  // Beams are active (TRUE) when clear, and inactive (FALSE) when blocked.
+  bool b1 = !beam1_active; // b1 is true if blocked
+  bool b2 = !beam2_active; // b2 is true if blocked
+  
+  static bool last_b1 = false;
+  static bool last_b2 = false;
+  static unsigned long stateEntryTime = 0;
+  static int sequence = 0; // 0: None, 1: B1 hit first, 2: B2 hit first, 3: Both hit simultaneously
+  static bool bothHitFlag = false;
+
+  // Update stateEntryTime on any state change to prevent timeout while actively blocked
+  if (b1 != last_b1 || b2 != last_b2) {
+    stateEntryTime = millis();
+  }
+
+  switch (detectionState) {
+    case IDLE:
+      if (b1 || b2) {
+        stateEntryTime = millis();
+        bothHitFlag = false;
+        if (b1 && !b2) {
+          detectionState = B1_HIT;
+          sequence = 1;
+          Serial.println("Sequence Start: B1");
+        } else if (b2 && !b1) {
+          detectionState = B2_HIT;
+          sequence = 2;
+          Serial.println("Sequence Start: B2");
+        } else {
+          // Simultaneous hit
+          detectionState = BOTH_HIT;
+          sequence = 3;
+          bothHitFlag = true;
+          Serial.println("Sequence Start: BOTH (Ambiguous)");
+        }
+      }
+      break;
+
+    case B1_HIT:
+      if (b1 && b2) {
+        detectionState = BOTH_HIT;
+        bothHitFlag = true;
+      } else if (!b1 && !b2) {
+        // Completion Check for IN (B2 -> BOTH -> B1 -> CLEAR)
+        // or Ambiguous resolved to IN
+        if (sequence == 2 && bothHitFlag) {
+          recordEvent("IN");
+        }
+        detectionState = IDLE;
+        sequence = 0;
+      }
+      break;
+
+    case B2_HIT:
+      if (b1 && b2) {
+        detectionState = BOTH_HIT;
+        bothHitFlag = true;
+      } else if (!b1 && !b2) {
+        // Completion Check for OUT (B1 -> BOTH -> B2 -> CLEAR)
+        // or Ambiguous resolved to OUT
+        if (sequence == 1 && bothHitFlag) {
+          recordEvent("OUT");
+        }
+        detectionState = IDLE;
+        sequence = 0;
+      }
+      break;
+
+    case BOTH_HIT:
+      if (!b1 && b2) {
+        // B1 cleared first - moving towards B2 (OUT)
+        if (sequence == 3) {
+          sequence = 1; 
+          Serial.println("Ambiguity Resolved: OUT");
+        }
+        detectionState = B2_HIT;
+      } else if (b1 && !b2) {
+        // B2 cleared first - moving towards B1 (IN)
+        if (sequence == 3) {
+          sequence = 2;
+          Serial.println("Ambiguity Resolved: IN");
+        }
+        detectionState = B1_HIT;
+      } else if (!b1 && !b2) {
+        // Both cleared at exact same time
+        if (sequence == 1) recordEvent("OUT");
+        else if (sequence == 2) recordEvent("IN");
+        detectionState = IDLE;
+        sequence = 0;
+      }
+      break;
+  }
+
+  // Timeout stuck states (300 seconds / 5 minutes)
+  // This allows people to stand in the door for a long time.
+  if (detectionState != IDLE && (millis() - stateEntryTime > 300000)) {
+    Serial.println("Sequence Timeout (5 min) - Resetting");
+    detectionState = IDLE;
+    sequence = 0;
+    bothHitFlag = false;
+  }
+
+  last_b1 = b1;
+  last_b2 = b2;
 }
