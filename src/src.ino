@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.057";
+String currentVersion = "1.1.058";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -747,8 +747,15 @@ void enterLightSleep() {
   gpio_wakeup_enable((gpio_num_t)ADC1_PIN, digitalRead(ADC1_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
   // Wake on Beam 2 change
   gpio_wakeup_enable((gpio_num_t)ADC2_PIN, digitalRead(ADC2_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
-  // Wake on PIR going LOW (to trigger deep sleep transition)
-  gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
+  
+  // Wake on PIR state change
+  if (digitalRead(PIR_PIN) == HIGH) {
+    // If motion is active, wake when it stops to trigger deep sleep transition
+    gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
+  } else {
+    // If no motion, wake when it starts
+    gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_HIGH_LEVEL);
+  }
   
   // Enter light sleep
   esp_light_sleep_start();
@@ -968,19 +975,29 @@ void loop()
   // Stay awake if motion, beams are blocked, or a sequence is in progress
   bool shouldStayAwake = motionDetected || beamsBlocked || (detectionState != IDLE);
 
-  // Instant return to deep sleep ONLY if no activity at all
-  if (!shouldStayAwake && currentState == NORMAL_OPERATION) {
+  // Check if we are done with networking tasks
+  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
+  bool hasEvents = (eventCount > 0);
+  
+  // We have pending work if:
+  // 1. Initial boot status hasn't been sent yet
+  // 2. We have events in the buffer
+  // 3. We are in the middle of a connection attempt
+  bool pendingWork = (!bootStatusSent || hasEvents) && (connectionRetries < 3 || isConnected);
+
+  // If boot status is sent and buffer is empty, we can stop requesting networking
+  if (bootStatusSent && !hasEvents && networkingRequested) {
+    networkingRequested = false;
+    Serial.println("Networking tasks complete. Entering idle mode.");
+  }
+
+  // Instant return to deep sleep ONLY if no activity and no pending work
+  if (!shouldStayAwake && !pendingWork && currentState == NORMAL_OPERATION) {
     goToSleep();
   }
 
-  // Only stay fully awake if we have networking work or other operations
-  bool pendingWork = networkingRequested && (eventCount > 0) && (connectionRetries < 3 || (WiFi.status() == WL_CONNECTED && mqttClient.connected()));
-  
-  if (!pendingWork && !shouldStayAwake && currentState == NORMAL_OPERATION) {
-    // This case should be covered by deep sleep, but for safety in other states:
-    enterLightSleep();
-  } else if (!pendingWork && shouldStayAwake && currentState == NORMAL_OPERATION) {
-    // If we should stay awake but have no networking, use light sleep to wait for changes
+  // Use light sleep to save power while active but idle
+  if (!pendingWork && currentState == NORMAL_OPERATION) {
     enterLightSleep();
   }
   
