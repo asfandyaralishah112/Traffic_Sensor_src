@@ -9,13 +9,15 @@
 #include <BLEUtils.h>
 #include <BLEAdvertising.h>
 #include <time.h>
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 
 // ================= WIFI & PROVISIONING =================
 #include "Provisioning.h"
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.055";
+String currentVersion = "1.1.056";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -119,8 +121,7 @@ struct CounterEvent {
 RTC_DATA_ATTR CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
 RTC_DATA_ATTR int eventCount = 0;
 
-uint16_t beamFreq1 = 0;
-uint16_t beamFreq2 = 0;
+// beamFreq1 and beamFreq2 removed as they are no longer applicable for static beams
 
 
 WiFiClientSecure wifiClientSecure;
@@ -134,6 +135,9 @@ bool wokeFromSleep = false;
 bool networkingRequested = false;
 int connectionRetries = 0;
 bool otaChecked = false;
+
+// Power Saving Definitions
+#define BEAM_CLEAR_LEVEL HIGH // Assuming HIGH means beam is hitting the sensor
 
 // =====================================================
 // LED CONTROL
@@ -451,7 +455,7 @@ void publishStatus(String status) {
 void publishTelemetry() {
   if (!deviceConfigured || DEVICE_UID == "UNCONFIGURED") return;
   static unsigned long lastTelemetryTime = 0;
-  if (millis() - lastTelemetryTime < 500) return; // 2 FPS for beam telemetry
+  if (millis() - lastTelemetryTime < 1000) return; // 1 FPS for beam telemetry
   lastTelemetryTime = millis();
 
   StaticJsonDocument<512> doc;
@@ -459,8 +463,9 @@ void publishTelemetry() {
   doc["state"] = (int)detectionState;
   
   JsonArray beams = doc.createNestedArray("beams");
-  beams.add(beamFreq1);
-  beams.add(beamFreq2);
+  // Report 1 for clear, 0 for blocked instead of frequency
+  beams.add(beam1_active ? 1 : 0);
+  beams.add(beam2_active ? 1 : 0);
   
   JsonArray states = doc.createNestedArray("states");
   states.add(beam1_active ? 1 : 0);
@@ -469,7 +474,7 @@ void publishTelemetry() {
   if (timeSynced) doc["timestamp"] = (uint32_t)time(nullptr);
   
   char buffer[512];
-  size_t len = serializeJson(doc, buffer);
+  serializeJson(doc, buffer);
   
   // Publish to MQTT
   if (mqttTelemetryEnabled && mqttClient.connected()) {
@@ -726,12 +731,26 @@ void goToSleep() {
   // Flush serial to ensure message is sent
   Serial.flush();
   
-  // Configure wakeup: GPIO 4 (PIR) High
-  // Note: For ESP32-C6, ext1 is the primary wakeup source for GPIOs
+  // Configure wakeup: GPIO 5 (PIR) High
   uint64_t wakeup_mask = (1ULL << PIR_PIN);
   esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   
   esp_deep_sleep_start();
+}
+
+void enterLightSleep() {
+  // Configure GPIO wakeup for light sleep
+  esp_sleep_enable_gpio_wakeup();
+  
+  // Wake on Beam 1 change
+  gpio_wakeup_enable((gpio_num_t)ADC1_PIN, digitalRead(ADC1_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+  // Wake on Beam 2 change
+  gpio_wakeup_enable((gpio_num_t)ADC2_PIN, digitalRead(ADC2_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+  // Wake on PIR going LOW (to trigger deep sleep transition)
+  gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
+  
+  // Enter light sleep
+  esp_light_sleep_start();
 }
 
 
@@ -833,7 +852,7 @@ void setup()
       WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
       
       unsigned long start = millis();
-      while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+      while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
         delay(500);
         Serial.print(".");
         updateStatusLED();
@@ -920,73 +939,42 @@ void loop()
   }
 
   // =====================================================
-  // BEAM SAMPLING (Non-Blocking 100ms window)
+  // BEAM SAMPLING (Static Digital Level)
   // =====================================================
   if (currentState != CALIBRATION_MODE && currentState != PROVISIONING_AP) {
-    int edges1 = 0, edges2 = 0;
-    bool state1 = false, prev1 = false;
-    bool state2 = false, prev2 = false;
-    unsigned long start = millis();
-
-    while (millis() - start < 20) { // 20ms window
-      // Sensor 1
-      int raw1 = analogRead(ADC1_PIN);
-      float v1 = (raw1 * vref) / adc_max;
-      if (!state1 && v1 > TH_HIGH) state1 = true;
-      else if (state1 && v1 < TH_LOW) state1 = false;
-      if (state1 && !prev1) edges1++;
-      prev1 = state1;
-
-      // Sensor 2
-      int raw2 = analogRead(ADC2_PIN);
-      float v2 = (raw2 * vref) / adc_max;
-      if (!state2 && v2 > TH_HIGH) state2 = true;
-      else if (state2 && v2 < TH_LOW) state2 = false;
-      if (state2 && !prev2) edges2++;
-      prev2 = state2;
-      
-      delayMicroseconds(50); 
-    }
-
-    beamFreq1 = edges1 * 50; // 20ms * 50 = 1s
-    beamFreq2 = edges2 * 50;
-
-    // Beam is "Active" (Clear) if frequency is near 1kHz
-    beam1_active = (beamFreq1 > 700 && beamFreq1 < 1500);
-    beam2_active = (beamFreq2 > 700 && beamFreq2 < 1500);
+    // Update beam states from digital levels
+    beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
+    beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
 
     processFlow();
     publishTelemetry();
 
     if (millis() - lastPrint > 1000) {
-      Serial.print("S1: "); Serial.print(beamFreq1); Serial.print(beam1_active ? " OK" : " BLK");
-      Serial.print(" | S2: "); Serial.print(beamFreq2); Serial.println(beam2_active ? " OK" : " BLK");
+      Serial.print("S1: "); Serial.print(beam1_active ? "OK " : "BLK");
+      Serial.print(" | S2: "); Serial.println(beam2_active ? "OK " : "BLK");
       lastPrint = millis();
     }
   }
 
   // =====================================================
-  // SLEEP MANAGEMENT
+  // SLEEP MANAGEMENT (Aggressive Optimization)
   // =====================================================
   bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
   
-  // Pending work: Have events to publish AND still have retries left OR already connected
-  bool hasPendingEvents = (eventCount > 0);
-  bool canStillConnect = (connectionRetries < 3);
-  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
-  
-  bool pendingWork = networkingRequested && hasPendingEvents && (canStillConnect || isConnected);
-
-  // Stay awake if motion or if we are actively trying to/succeeded in sending events
-  if (motionDetected || pendingWork || currentState != NORMAL_OPERATION) {
-    lastActivityTime = millis();
-  }
-
-  if (millis() - lastActivityTime > SLEEP_DELAY_MS) {
+  // Instant return to deep sleep if motion stops
+  if (!motionDetected && currentState == NORMAL_OPERATION) {
     goToSleep();
   }
+
+  // Only stay fully awake if we have networking work or other operations
+  bool pendingWork = networkingRequested && (eventCount > 0) && (connectionRetries < 3 || (WiFi.status() == WL_CONNECTED && mqttClient.connected()));
   
-  delay(5); // Small delay to prevent watchdog issues
+  if (!pendingWork && currentState == NORMAL_OPERATION) {
+    // Enter light sleep to save power while waiting for motion or beam changes
+    enterLightSleep();
+  }
+  
+  delay(1); 
 }
 
 // =====================================================
