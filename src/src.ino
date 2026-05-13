@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.058";
+String currentVersion = "1.1.059";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -108,7 +108,13 @@ enum DetectionState { IDLE, B1_HIT, BOTH_HIT, B2_HIT };
 DetectionState detectionState = IDLE;
 
 volatile bool otaRequested = false;
-unsigned long lastTelemetry = 0; // v1.0.027: unified timing
+unsigned long lastTelemetry = 0; 
+
+// ================= INTERRUPT FLAGS =================
+volatile bool beamChanged = false;
+void IRAM_ATTR onBeamChange() {
+  beamChanged = true;
+}
 
 // ================= EVENT BUFFER =================
 struct CounterEvent {
@@ -723,16 +729,21 @@ void checkForOTA()
 
 
 void goToSleep() {
+  // Requirement: Ensure all events are sent before deep sleep
+  // We check this in the loop, but this is the final entry point
+  bool hasEvents = (eventCount > 0);
+  if (hasEvents && WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    Serial.println("Finalizing upload before sleep...");
+    publishBufferedEvents();
+  }
+
   Serial.println("\n--- Entering Deep Sleep ---");
-  // Turn off sensor power and LEDs
   digitalWrite(SENSOR_PWR_PIN, LOW);
   setLED(false, false, false);
   
-  // Flush serial to ensure message is sent
   Serial.flush();
-  delay(100); // Stabilization delay
+  delay(100); 
   
-  // Configure wakeup: GPIO 5 (PIR) High
   uint64_t wakeup_mask = (1ULL << PIR_PIN);
   esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   
@@ -740,25 +751,22 @@ void goToSleep() {
 }
 
 void enterLightSleep() {
-  // Configure GPIO wakeup for light sleep
   esp_sleep_enable_gpio_wakeup();
   
-  // Wake on Beam 1 change
+  // Wake on Beam changes
   gpio_wakeup_enable((gpio_num_t)ADC1_PIN, digitalRead(ADC1_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
-  // Wake on Beam 2 change
   gpio_wakeup_enable((gpio_num_t)ADC2_PIN, digitalRead(ADC2_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
   
   // Wake on PIR state change
   if (digitalRead(PIR_PIN) == HIGH) {
-    // If motion is active, wake when it stops to trigger deep sleep transition
     gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
   } else {
-    // If no motion, wake when it starts
     gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_HIGH_LEVEL);
   }
   
-  // Enter light sleep
   esp_light_sleep_start();
+  // When we wake up, force a beam state check
+  beamChanged = true;
 }
 
 
@@ -809,25 +817,21 @@ void setup()
 
   // OBJECTIVE 2 & 4: Load configurations from NVS
   loadDeviceConfig();
-
-  // Requirement: initialize NTP jitter (0-60 minutes)
   dailySyncOffset = random(0, 3600000);
   
-  // Initialize GPIOs
-  // pinMode(TX_PIN, OUTPUT) removed - Only detection mode active
-
   pinMode(ADC1_PIN, INPUT);
   pinMode(ADC2_PIN, INPUT);
   pinMode(LED_RED, OUTPUT);
   pinMode(LED_GREEN, OUTPUT);
   pinMode(LED_BLUE, OUTPUT);
-  setLED(false, true, true); // Blue + Green ON (Cyan)
+  setLED(false, true, true); 
 
-  // Start 1kHz tone for IR Emitters
-  // tone(TX_PIN, 1000) removed - Only detection mode active
+  // Requirement: Interrupt based solution
+  attachInterrupt(digitalPinToInterrupt(ADC1_PIN), onBeamChange, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ADC2_PIN), onBeamChange, CHANGE);
 
   analogReadResolution(12);
-  Serial.println("Dual Beam ADC Detection Mode Initialized");
+  Serial.println("Dual Beam Interrupt Mode Initialized");
 
   // v1.0.043: Init Success Signal - Cyan (Blue+Green ON)
   if (sensorInitialized) {
@@ -929,6 +933,12 @@ void loop()
     }
 
     if (WiFi.status() == WL_CONNECTED) {
+      // Async OTA trigger
+      if (otaRequested && currentState != OTA_UPDATE) {
+        otaRequested = false;
+        checkForOTA();
+      }
+
       if (!mqttClient.connected()) {
         currentState = MQTT_CONNECT;
         mqttReconnect();
@@ -942,63 +952,48 @@ void loop()
 
   updateStatusLED();
 
-  // Async OTA trigger
-  if (otaRequested && currentState != OTA_UPDATE) {
-    otaRequested = false;
-    checkForOTA();
-  }
-
   // =====================================================
-  // BEAM SAMPLING (Static Digital Level)
+  // BEAM PROCESSING (Interrupt Driven)
   // =====================================================
-  if (currentState != CALIBRATION_MODE && currentState != PROVISIONING_AP) {
-    // Update beam states from digital levels
+  if (beamChanged && currentState != CALIBRATION_MODE && currentState != PROVISIONING_AP) {
+    beamChanged = false;
+    // Update states once on interrupt or wakeup
     beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
     beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
 
     processFlow();
     publishTelemetry();
-
-    if (millis() - lastPrint > 1000) {
-      Serial.print("S1: "); Serial.print(beam1_active ? "OK " : "BLK");
-      Serial.print(" | S2: "); Serial.println(beam2_active ? "OK " : "BLK");
-      lastPrint = millis();
-    }
   }
 
   // =====================================================
-  // SLEEP MANAGEMENT (Aggressive Optimization)
+  // SLEEP MANAGEMENT (Strict Requirement Enforcement)
   // =====================================================
   bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
   bool beamsBlocked = (!beam1_active || !beam2_active);
-  
-  // Stay awake if motion, beams are blocked, or a sequence is in progress
-  bool shouldStayAwake = motionDetected || beamsBlocked || (detectionState != IDLE);
-
-  // Check if we are done with networking tasks
-  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
   bool hasEvents = (eventCount > 0);
+  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
   
-  // We have pending work if:
-  // 1. Initial boot status hasn't been sent yet
-  // 2. We have events in the buffer
-  // 3. We are in the middle of a connection attempt
-  bool pendingWork = (!bootStatusSent || hasEvents) && (connectionRetries < 3 || isConnected);
+  // Requirement: if an in or out was detected, publish it before going to deep sleep.
+  bool pendingNetworking = (hasEvents && (connectionRetries < 3 || isConnected)) || !bootStatusSent;
 
-  // If boot status is sent and buffer is empty, we can stop requesting networking
-  if (bootStatusSent && !hasEvents && networkingRequested) {
-    networkingRequested = false;
-    Serial.println("Networking tasks complete. Entering idle mode.");
-  }
-
-  // Instant return to deep sleep ONLY if no activity and no pending work
-  if (!shouldStayAwake && !pendingWork && currentState == NORMAL_OPERATION) {
+  // Requirement: ESP should go to deep sleep immediately after PIR reports no motion detected.
+  // BUT we must publish pending events first.
+  if (!motionDetected && !pendingNetworking && currentState == NORMAL_OPERATION) {
     goToSleep();
   }
 
-  // Use light sleep to save power while active but idle
-  if (!pendingWork && currentState == NORMAL_OPERATION) {
-    enterLightSleep();
+  // Requirement: transition to light sleep if motion is detected by PIR.
+  // OR if we are waiting for beams or networking.
+  bool shouldStayAwakeForProcessing = beamsBlocked || (detectionState != IDLE) || pendingNetworking;
+
+  if (currentState == NORMAL_OPERATION) {
+    if (!pendingNetworking) {
+      // If no active networking, enter light sleep to wait for interrupts
+      enterLightSleep();
+    } else {
+      // While awake and networking, we can optionally send periodic telemetry
+      publishTelemetry();
+    }
   }
   
   delay(1); 
@@ -1021,6 +1016,13 @@ void processFlow() {
   // Update stateEntryTime on any state change to prevent timeout while actively blocked
   if (b1 != last_b1 || b2 != last_b2) {
     stateEntryTime = millis();
+  }
+
+  // Requirement: if both beams are blocked more than 30 seconds, return to deep sleep.
+  if (b1 && b2 && (millis() - stateEntryTime > 30000)) {
+    Serial.println("Both beams blocked > 30s - Triggering Deep Sleep");
+    detectionState = IDLE;
+    goToSleep();
   }
 
   switch (detectionState) {
