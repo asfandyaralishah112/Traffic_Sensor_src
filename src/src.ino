@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.060";
+String currentVersion = "1.1.061";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -126,9 +126,7 @@ struct CounterEvent {
 #define MAX_BUFFERED_EVENTS 100
 RTC_DATA_ATTR CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
 RTC_DATA_ATTR int eventCount = 0;
-
-// beamFreq1 and beamFreq2 removed as they are no longer applicable for static beams
-
+RTC_DATA_ATTR bool hourlyPublishPending = false; // Flag for scheduled hourly upload
 
 WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient; 
@@ -412,8 +410,11 @@ void recordEvent(String direction) {
     eventBuffer[eventCount].timestamp = t;
     eventBuffer[eventCount].timestampValid = valid;
     eventCount++;
-    networkingRequested = true; // Trigger WiFi/MQTT connection on activity
-    Serial.println("Event Recorded: " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
+    Serial.print("Recorded Event: ");
+    Serial.println(direction);
+    
+    // v1.1.061: Batching enabled. networkingRequested no longer set here.
+    // Event will be published during the hourly timer wakeup or next cold boot.
   } else {
     for (int i = 0; i < MAX_BUFFERED_EVENTS - 1; i++) {
       eventBuffer[i] = eventBuffer[i+1];
@@ -422,7 +423,6 @@ void recordEvent(String direction) {
     eventBuffer[MAX_BUFFERED_EVENTS-1].direction[sizeof(eventBuffer[MAX_BUFFERED_EVENTS-1].direction) - 1] = '\0';
     eventBuffer[MAX_BUFFERED_EVENTS-1].timestamp = t;
     eventBuffer[MAX_BUFFERED_EVENTS-1].timestampValid = valid;
-    networkingRequested = true; // Trigger WiFi/MQTT connection on activity
     Serial.println("Event Recorded (Buffer Full): " + direction + (valid ? " [UTC]" : " [RELATIVE]"));
   }
 }
@@ -729,14 +729,6 @@ void checkForOTA()
 
 
 void goToSleep() {
-  // Requirement: Ensure all events are sent before deep sleep
-  // We check this in the loop, but this is the final entry point
-  bool hasEvents = (eventCount > 0);
-  if (hasEvents && WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
-    Serial.println("Finalizing upload before sleep...");
-    publishBufferedEvents();
-  }
-
   Serial.println("\n--- Entering Deep Sleep ---");
   digitalWrite(SENSOR_PWR_PIN, LOW);
   setLED(false, false, false);
@@ -744,29 +736,14 @@ void goToSleep() {
   Serial.flush();
   delay(100); 
   
+  // Wake on PIR (High Level)
   uint64_t wakeup_mask = (1ULL << PIR_PIN);
   esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
   
+  // Wake every 1 hour to publish batch (3600 seconds)
+  esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL);
+  
   esp_deep_sleep_start();
-}
-
-void enterLightSleep() {
-  esp_sleep_enable_gpio_wakeup();
-  
-  // Wake on Beam changes (Detect entry/exit)
-  gpio_wakeup_enable((gpio_num_t)ADC1_PIN, digitalRead(ADC1_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
-  gpio_wakeup_enable((gpio_num_t)ADC2_PIN, digitalRead(ADC2_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
-  
-  // Wake on PIR state change (Specifically to detect when motion stops -> LOW)
-  gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
-  
-  Serial.println("--- Entering Light Sleep ---");
-  Serial.flush();
-  
-  esp_light_sleep_start();
-  
-  // When we wake up, force a beam state check
-  beamChanged = true;
 }
 
 
@@ -787,17 +764,24 @@ void setup()
   
   // Log wakeup reason
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-  Serial.print("Wakeup Reason (Raw): "); Serial.println(wakeup_reason);
-
-  if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
-    Serial.println("Wakeup Source: Sleep Wakeup (PIR or GPIO)");
+  
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
+    Serial.println("Wakeup Source: Timer (Hourly Batch Upload)");
     wokeFromSleep = true;
-    networkingRequested = (eventCount > 0); // Upload only if we have events
+    hourlyPublishPending = true;
+    networkingRequested = (eventCount > 0);
+  } else if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
+    Serial.println("Wakeup Source: PIR Motion");
+    wokeFromSleep = true;
+    hourlyPublishPending = false;
+    networkingRequested = false; // Don't connect on motion, just record
   } else {
-    Serial.println("Wakeup Source: Power-on or Hardware Reset");
+    Serial.println("Wakeup Source: Cold Boot");
     wokeFromSleep = false;
-    networkingRequested = true; // Connect immediately for OTA/Status on cold boot
+    hourlyPublishPending = false;
+    networkingRequested = true; // Connect on first boot for status/OTA/time
   }
+  
   lastActivityTime = millis();
 
   // If we have buffered events from a previous session, trigger networking
@@ -897,12 +881,11 @@ void loop()
 {
   handleSerialProvisioning();
   
-  // v1.0.042: PROVISIONING LOOP
   if (currentState == PROVISIONING_AP) {
     loopProvisioning();
     updateStatusLED();
     delay(5);
-    return; // Block other logic
+    return;
   }
 
   // =====================================================
@@ -910,106 +893,96 @@ void loop()
   // =====================================================
   bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
   
-  // REQUIREMENT: If PIR reports no motion, instantly go to deep sleep
   if (!motionDetected && currentState == NORMAL_OPERATION) {
-    Serial.println("No motion detected. Preparing for Deep Sleep.");
-    
-    // Make sure to publish buffered events if we are already connected
-    if (eventCount > 0 && WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
-      publishBufferedEvents();
+    // If PIR is LOW, we only stay awake if we have an hourly publish pending
+    if (hourlyPublishPending && eventCount > 0) {
+      // Stay awake to process networking below
+    } else {
+      Serial.println("PIR LOW and no scheduled upload. Deep Sleep.");
+      goToSleep();
+      return;
+    }
+  }
+
+  // =====================================================
+  // 2. BEAM PROCESSING (Only while motion detected)
+  // =====================================================
+  if (motionDetected) {
+    beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
+    beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
+
+    if (beamChanged && currentState != CALIBRATION_MODE) {
+      beamChanged = false;
+      processFlow();
+      // publishTelemetry(); // Usually disabled to save power during detection
     }
     
-    goToSleep();
-    return; // Should not reach here
+    // Safety Timeout for blocked beams
+    static unsigned long bothBlockedStartTime = 0;
+    if (!beam1_active && !beam2_active) {
+      if (bothBlockedStartTime == 0) bothBlockedStartTime = millis();
+      if (millis() - bothBlockedStartTime > 30000) {
+        Serial.println("Both beams blocked > 30s. Triggering safety Deep Sleep.");
+        goToSleep();
+      }
+    } else {
+      bothBlockedStartTime = 0;
+    }
   }
 
   // =====================================================
-  // 2. BEAM PROCESSING (Interrupt or Wakeup Driven)
+  // 3. NETWORKING (Hourly or Cold Boot)
   // =====================================================
-  // Update beam states while awake and motion is detected
-  beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
-  beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
-
-  if (beamChanged && currentState != CALIBRATION_MODE) {
-    beamChanged = false;
-    processFlow();
-    publishTelemetry();
-  }
-
-  // =====================================================
-  // 3. NETWORKING (Only while motion is active)
-  // =====================================================
-  if (networkingRequested || eventCount > 0) {
+  if (networkingRequested || hourlyPublishPending) {
     if (WiFi.status() != WL_CONNECTED && connectionRetries < 3) {
       static unsigned long lastConnectAttempt = 0;
-      if (millis() - lastConnectAttempt > 15000) { // Try every 15s
-        Serial.printf("\nAttempting WiFi Connection (%d/3)...\n", connectionRetries + 1);
+      if (millis() - lastConnectAttempt > 15000) {
+        Serial.printf("\nConnecting WiFi for batch upload (%d/3)...\n", connectionRetries + 1);
         WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
         lastConnectAttempt = millis();
         
-        // Brief wait to see if it connects immediately
         unsigned long waitStart = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 5000) {
+        while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 8000) {
           delay(100);
           updateStatusLED();
         }
         
         if (WiFi.status() != WL_CONNECTED) {
           connectionRetries++;
-          if (connectionRetries >= 3) Serial.println("WiFi Connection Failed. Will retry on next PIR wakeup.");
+          if (connectionRetries >= 3) {
+            Serial.println("Batch upload failed. Retrying next hour.");
+            hourlyPublishPending = false; // Give up for this hour
+            networkingRequested = false;
+          }
         } else {
           Serial.println("WiFi Connected");
           syncTime();
           if (!otaChecked) { checkForOTA(); otaChecked = true; }
-          startBLEAdvertising();
         }
       }
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-      // Async OTA trigger
-      if (otaRequested && currentState != OTA_UPDATE) {
-        otaRequested = false;
-        checkForOTA();
-      }
-
       if (!mqttClient.connected()) {
-        currentState = MQTT_CONNECT;
         mqttReconnect();
       } else {
         mqttClient.loop();
         publishBufferedEvents();
-        publishTelemetry();
+        // Once buffered events are cleared, we are done with the hourly publish
+        if (eventCount == 0) {
+          Serial.println("Batch upload complete.");
+          hourlyPublishPending = false;
+          networkingRequested = false;
+        }
       }
     }
   }
 
   updateStatusLED();
 
-  // =====================================================
-  // 4. POWER STATE MANAGEMENT (IDLE / TIMEOUT / SLEEP)
-  // =====================================================
-  bool beamsBlocked = (!beam1_active || !beam2_active);
-  bool isDetecting = beamsBlocked || (detectionState != IDLE);
-  
-  // REQUIREMENT: if both beams breaks, and never recovers after 30seconds, go to deep sleep
-  static unsigned long bothBlockedStartTime = 0;
-  if (!beam1_active && !beam2_active) {
-    if (bothBlockedStartTime == 0) bothBlockedStartTime = millis();
-    if (millis() - bothBlockedStartTime > 30000) {
-      Serial.println("Both beams blocked > 30s. Triggering safety Deep Sleep.");
-      goToSleep();
-    }
-  } else {
-    bothBlockedStartTime = 0;
-  }
-  
-  // If we have events to send, stay awake to try connecting
-  bool isNetworking = (networkingRequested || eventCount > 0) && (connectionRetries < 3);
-
-  // If PIR is HIGH but no active processing is needed, enter light sleep
-  if (!isDetecting && !isNetworking && currentState == NORMAL_OPERATION) {
-    enterLightSleep();
+  // If PIR is LOW and we've finished our networking (or failed), go back to sleep
+  if (!motionDetected && !hourlyPublishPending && !networkingRequested) {
+    goToSleep();
   }
   
   delay(1); 
