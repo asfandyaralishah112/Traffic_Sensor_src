@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.056";
+String currentVersion = "1.1.057";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -730,6 +730,7 @@ void goToSleep() {
   
   // Flush serial to ensure message is sent
   Serial.flush();
+  delay(100); // Stabilization delay
   
   // Configure wakeup: GPIO 5 (PIR) High
   uint64_t wakeup_mask = (1ULL << PIR_PIN);
@@ -771,14 +772,16 @@ void setup()
   
   // Log wakeup reason
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) {
-    Serial.println("Wakeup Source: PIR Motion Detected (Delayed Networking)");
+  Serial.print("Wakeup Reason (Raw): "); Serial.println(wakeup_reason);
+
+  if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
+    Serial.println("Wakeup Source: Sleep Wakeup (PIR or GPIO)");
     wokeFromSleep = true;
-    networkingRequested = false; // Wait for valid activity
+    networkingRequested = (eventCount > 0); // Upload only if we have events
   } else {
-    Serial.println("Wakeup Source: Power-on or Reset (Immediate Networking)");
+    Serial.println("Wakeup Source: Power-on or Hardware Reset");
     wokeFromSleep = false;
-    networkingRequested = true; // Connect immediately for OTA/Status
+    networkingRequested = true; // Connect immediately for OTA/Status on cold boot
   }
   lastActivityTime = millis();
 
@@ -960,17 +963,24 @@ void loop()
   // SLEEP MANAGEMENT (Aggressive Optimization)
   // =====================================================
   bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
+  bool beamsBlocked = (!beam1_active || !beam2_active);
   
-  // Instant return to deep sleep if motion stops
-  if (!motionDetected && currentState == NORMAL_OPERATION) {
+  // Stay awake if motion, beams are blocked, or a sequence is in progress
+  bool shouldStayAwake = motionDetected || beamsBlocked || (detectionState != IDLE);
+
+  // Instant return to deep sleep ONLY if no activity at all
+  if (!shouldStayAwake && currentState == NORMAL_OPERATION) {
     goToSleep();
   }
 
   // Only stay fully awake if we have networking work or other operations
   bool pendingWork = networkingRequested && (eventCount > 0) && (connectionRetries < 3 || (WiFi.status() == WL_CONNECTED && mqttClient.connected()));
   
-  if (!pendingWork && currentState == NORMAL_OPERATION) {
-    // Enter light sleep to save power while waiting for motion or beam changes
+  if (!pendingWork && !shouldStayAwake && currentState == NORMAL_OPERATION) {
+    // This case should be covered by deep sleep, but for safety in other states:
+    enterLightSleep();
+  } else if (!pendingWork && shouldStayAwake && currentState == NORMAL_OPERATION) {
+    // If we should stay awake but have no networking, use light sleep to wait for changes
     enterLightSleep();
   }
   
