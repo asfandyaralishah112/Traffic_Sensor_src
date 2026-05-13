@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.059";
+String currentVersion = "1.1.060";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -753,18 +753,18 @@ void goToSleep() {
 void enterLightSleep() {
   esp_sleep_enable_gpio_wakeup();
   
-  // Wake on Beam changes
+  // Wake on Beam changes (Detect entry/exit)
   gpio_wakeup_enable((gpio_num_t)ADC1_PIN, digitalRead(ADC1_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
   gpio_wakeup_enable((gpio_num_t)ADC2_PIN, digitalRead(ADC2_PIN) == HIGH ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
   
-  // Wake on PIR state change
-  if (digitalRead(PIR_PIN) == HIGH) {
-    gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
-  } else {
-    gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_HIGH_LEVEL);
-  }
+  // Wake on PIR state change (Specifically to detect when motion stops -> LOW)
+  gpio_wakeup_enable((gpio_num_t)PIR_PIN, GPIO_INTR_LOW_LEVEL);
+  
+  Serial.println("--- Entering Light Sleep ---");
+  Serial.flush();
   
   esp_light_sleep_start();
+  
   // When we wake up, force a beam state check
   beamChanged = true;
 }
@@ -896,6 +896,7 @@ void setup()
 void loop()
 {
   handleSerialProvisioning();
+  
   // v1.0.042: PROVISIONING LOOP
   if (currentState == PROVISIONING_AP) {
     loopProvisioning();
@@ -904,8 +905,41 @@ void loop()
     return; // Block other logic
   }
 
-  // Handle Networking
-  if (networkingRequested) {
+  // =====================================================
+  // 1. PIR STATE CHECK (PRIMARY POWER CONTROLLER)
+  // =====================================================
+  bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
+  
+  // REQUIREMENT: If PIR reports no motion, instantly go to deep sleep
+  if (!motionDetected && currentState == NORMAL_OPERATION) {
+    Serial.println("No motion detected. Preparing for Deep Sleep.");
+    
+    // Make sure to publish buffered events if we are already connected
+    if (eventCount > 0 && WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+      publishBufferedEvents();
+    }
+    
+    goToSleep();
+    return; // Should not reach here
+  }
+
+  // =====================================================
+  // 2. BEAM PROCESSING (Interrupt or Wakeup Driven)
+  // =====================================================
+  // Update beam states while awake and motion is detected
+  beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
+  beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
+
+  if (beamChanged && currentState != CALIBRATION_MODE) {
+    beamChanged = false;
+    processFlow();
+    publishTelemetry();
+  }
+
+  // =====================================================
+  // 3. NETWORKING (Only while motion is active)
+  // =====================================================
+  if (networkingRequested || eventCount > 0) {
     if (WiFi.status() != WL_CONNECTED && connectionRetries < 3) {
       static unsigned long lastConnectAttempt = 0;
       if (millis() - lastConnectAttempt > 15000) { // Try every 15s
@@ -922,7 +956,7 @@ void loop()
         
         if (WiFi.status() != WL_CONNECTED) {
           connectionRetries++;
-          if (connectionRetries >= 3) Serial.println("WiFi Connection Failed after 3 attempts.");
+          if (connectionRetries >= 3) Serial.println("WiFi Connection Failed. Will retry on next PIR wakeup.");
         } else {
           Serial.println("WiFi Connected");
           syncTime();
@@ -953,47 +987,29 @@ void loop()
   updateStatusLED();
 
   // =====================================================
-  // BEAM PROCESSING (Interrupt Driven)
+  // 4. POWER STATE MANAGEMENT (IDLE / TIMEOUT / SLEEP)
   // =====================================================
-  if (beamChanged && currentState != CALIBRATION_MODE && currentState != PROVISIONING_AP) {
-    beamChanged = false;
-    // Update states once on interrupt or wakeup
-    beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
-    beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
-
-    processFlow();
-    publishTelemetry();
-  }
-
-  // =====================================================
-  // SLEEP MANAGEMENT (Strict Requirement Enforcement)
-  // =====================================================
-  bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
   bool beamsBlocked = (!beam1_active || !beam2_active);
-  bool hasEvents = (eventCount > 0);
-  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
+  bool isDetecting = beamsBlocked || (detectionState != IDLE);
   
-  // Requirement: if an in or out was detected, publish it before going to deep sleep.
-  bool pendingNetworking = (hasEvents && (connectionRetries < 3 || isConnected)) || !bootStatusSent;
-
-  // Requirement: ESP should go to deep sleep immediately after PIR reports no motion detected.
-  // BUT we must publish pending events first.
-  if (!motionDetected && !pendingNetworking && currentState == NORMAL_OPERATION) {
-    goToSleep();
-  }
-
-  // Requirement: transition to light sleep if motion is detected by PIR.
-  // OR if we are waiting for beams or networking.
-  bool shouldStayAwakeForProcessing = beamsBlocked || (detectionState != IDLE) || pendingNetworking;
-
-  if (currentState == NORMAL_OPERATION) {
-    if (!pendingNetworking) {
-      // If no active networking, enter light sleep to wait for interrupts
-      enterLightSleep();
-    } else {
-      // While awake and networking, we can optionally send periodic telemetry
-      publishTelemetry();
+  // REQUIREMENT: if both beams breaks, and never recovers after 30seconds, go to deep sleep
+  static unsigned long bothBlockedStartTime = 0;
+  if (!beam1_active && !beam2_active) {
+    if (bothBlockedStartTime == 0) bothBlockedStartTime = millis();
+    if (millis() - bothBlockedStartTime > 30000) {
+      Serial.println("Both beams blocked > 30s. Triggering safety Deep Sleep.");
+      goToSleep();
     }
+  } else {
+    bothBlockedStartTime = 0;
+  }
+  
+  // If we have events to send, stay awake to try connecting
+  bool isNetworking = (networkingRequested || eventCount > 0) && (connectionRetries < 3);
+
+  // If PIR is HIGH but no active processing is needed, enter light sleep
+  if (!isDetecting && !isNetworking && currentState == NORMAL_OPERATION) {
+    enterLightSleep();
   }
   
   delay(1); 
@@ -1016,13 +1032,6 @@ void processFlow() {
   // Update stateEntryTime on any state change to prevent timeout while actively blocked
   if (b1 != last_b1 || b2 != last_b2) {
     stateEntryTime = millis();
-  }
-
-  // Requirement: if both beams are blocked more than 30 seconds, return to deep sleep.
-  if (b1 && b2 && (millis() - stateEntryTime > 30000)) {
-    Serial.println("Both beams blocked > 30s - Triggering Deep Sleep");
-    detectionState = IDLE;
-    goToSleep();
   }
 
   switch (detectionState) {
