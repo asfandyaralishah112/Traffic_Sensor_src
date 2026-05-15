@@ -17,7 +17,7 @@
 
 
 // ================= OTA & VERSION =================
-String currentVersion = "1.1.061";
+String currentVersion = "1.1.062";
 String versionURL = "https://raw.githubusercontent.com/asfandyaralishah112/Traffic_Sensor_src/main/version.json";
 
 // ================= PROTOTYPES =================
@@ -28,6 +28,9 @@ void updateStatusLED();
 void setLED(bool r, bool g, bool b);
 void syncTime();
 void correctBufferedTimestamps();
+void runMonitoringMode();
+void goToSleep();
+float readBatteryVoltage();
 
 // ================= DEVICE ID =================
 String DEVICE_UID = "UNCONFIGURED";
@@ -61,17 +64,17 @@ bool bleStarted = false; // Flag to track BLE initialization state
 // ================= GPIO =================
 // TX_PIN removed - Only detection mode active
 
-#define ADC1_PIN 6   // Sensor 1
-#define ADC2_PIN 7   // Sensor 2
+#define ADC1_PIN 2   // Sensor 1 (Updated)
+#define ADC2_PIN 3   // Sensor 2 (Updated)
+#define BATTERY_PIN 0 // Placeholder
 
 
 #define LED_RED   23
 #define LED_GREEN 22
 #define LED_BLUE  21
 
-#define PIR_PIN   5
-#define SENSOR_PWR_PIN 1 // Powers the phototransistors (High = ON)
-#define SLEEP_DELAY_MS 30000 // 30 seconds of inactivity before deep sleep
+#define SLEEP_DELAY_MS 30000 // 30 seconds of inactivity before deep sleep (legacy)
+#define BEAM_CLEAR_LEVEL HIGH // Assuming HIGH means beam is hitting the sensor
 
 // ================= SYSTEM STATES =================
 enum SystemState {
@@ -86,6 +89,20 @@ enum SystemState {
 };
 
 SystemState currentState = BOOT;
+enum DetectionState { IDLE, B1_HIT, BOTH_HIT, B2_HIT };
+DetectionState detectionState = IDLE;
+int sequence = 0;
+bool bothHitFlag = false;
+unsigned long stateEntryTime = 0;
+struct CounterEvent {
+  char direction[8];
+  time_t timestamp;
+  bool timestampValid;
+};
+#define MAX_BUFFERED_EVENTS 100
+RTC_DATA_ATTR CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
+RTC_DATA_ATTR int eventCount = 0;
+RTC_DATA_ATTR bool hourlyPublishPending = false; 
 
 Preferences preferences; // System preferences
 Preferences devicePrefs; // Factory provisioning preferences
@@ -103,9 +120,7 @@ float TH_LOW  = 0.8;
 bool beam1_active = false;
 bool beam2_active = false;
 
-// State Machine for Direction
-enum DetectionState { IDLE, B1_HIT, BOTH_HIT, B2_HIT };
-DetectionState detectionState = IDLE;
+// State Machine for Direction moved to top
 
 volatile bool otaRequested = false;
 unsigned long lastTelemetry = 0; 
@@ -116,17 +131,69 @@ void IRAM_ATTR onBeamChange() {
   beamChanged = true;
 }
 
-// ================= EVENT BUFFER =================
-struct CounterEvent {
-  char direction[8];
-  time_t timestamp;
-  bool timestampValid;
-};
+void runMonitoringMode(uint64_t initial_wakeup_mask) {
+  // Ultra-fast initialization
+  pinMode(ADC1_PIN, INPUT_PULLUP);
+  pinMode(ADC2_PIN, INPUT_PULLUP);
+  
+  // Pre-load state from hardware wakeup trigger
+  beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
+  beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
+  
+  detectionState = IDLE;
+  sequence = 0;
+  bothHitFlag = false;
 
-#define MAX_BUFFERED_EVENTS 100
-RTC_DATA_ATTR CounterEvent eventBuffer[MAX_BUFFERED_EVENTS];
-RTC_DATA_ATTR int eventCount = 0;
-RTC_DATA_ATTR bool hourlyPublishPending = false; // Flag for scheduled hourly upload
+  if (initial_wakeup_mask & (1ULL << ADC1_PIN)) {
+    detectionState = B1_HIT;
+    sequence = 1;
+    beam1_active = false; // Force blocked state for trigger pin
+  } else if (initial_wakeup_mask & (1ULL << ADC2_PIN)) {
+    detectionState = B2_HIT;
+    sequence = 2;
+    beam2_active = false; // Force blocked state for trigger pin
+  }
+  
+  // Attach interrupts for beam changes
+  attachInterrupt(digitalPinToInterrupt(ADC1_PIN), onBeamChange, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ADC2_PIN), onBeamChange, CHANGE);
+  
+  Serial.println("Monitoring beams (Ultra-Fast Mode)...");
+
+  unsigned long lastActivityTime = millis();
+  unsigned long lastEventCount = eventCount;
+
+  while (millis() - lastActivityTime < 5000) {
+    // Update states directly (Continuous Polling for Speed)
+    beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
+    beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
+    
+    // Maintain activity timer if ANY beam is CURRENTLY blocked
+    if (!beam1_active || !beam2_active) {
+      lastActivityTime = millis();
+    }
+
+    processFlow();
+    
+    // If a new event was recorded and beams are now clear, sleep instantly
+    if (eventCount > lastEventCount && beam1_active && beam2_active) {
+      break;
+    }
+    
+    yield();
+  }
+  
+  Serial.println("\n[SYSTEM] Returning to Deep Sleep.");
+  Serial.flush();
+  
+  detachInterrupt(digitalPinToInterrupt(ADC1_PIN));
+  detachInterrupt(digitalPinToInterrupt(ADC2_PIN));
+  
+  goToSleep();
+}
+
+// ================= EVENT BUFFER =================
+// Event buffer moved to top
 
 WiFiClientSecure wifiClientSecure;
 WiFiClient wifiClient; 
@@ -141,7 +208,7 @@ int connectionRetries = 0;
 bool otaChecked = false;
 
 // Power Saving Definitions
-#define BEAM_CLEAR_LEVEL HIGH // Assuming HIGH means beam is hitting the sensor
+// Power Saving Definitions moved to top
 
 // =====================================================
 // LED CONTROL
@@ -390,6 +457,12 @@ void handleSerialProvisioning() {
 // v1.0.041: Dilation Helper
 // Removed dilation helper
 
+float readBatteryVoltage() {
+  int raw = analogRead(BATTERY_PIN);
+  // Default calculation for 1:1 divider on 3.3V rail
+  float voltage = (raw / 4095.0) * 3.3 * 2.0;
+  return voltage;
+}
 
 void recordEvent(String direction) {
   time_t t;
@@ -410,8 +483,12 @@ void recordEvent(String direction) {
     eventBuffer[eventCount].timestamp = t;
     eventBuffer[eventCount].timestampValid = valid;
     eventCount++;
-    Serial.print("Recorded Event: ");
-    Serial.println(direction);
+    Serial.println("\n**********************************");
+    Serial.print("  EVENT DETECTED: "); Serial.println(direction);
+    Serial.print("  BUFFERED COUNT: "); Serial.println(eventCount);
+    Serial.println("**********************************");
+    Serial.flush();
+    delay(100); // Important: Give Serial time to transmit before possible sleep
     
     // v1.1.061: Batching enabled. networkingRequested no longer set here.
     // Event will be published during the hourly timer wakeup or next cold boot.
@@ -605,6 +682,7 @@ void publishBufferedEvents() {
     doc["direction"] = ev.direction;
     doc["business"] = business_name; // v1.0.042
     doc["screen_id"] = screen_id;
+    doc["battery"] = readBatteryVoltage();
 
     char buffer[256];
     serializeJson(doc, buffer);
@@ -730,15 +808,25 @@ void checkForOTA()
 
 void goToSleep() {
   Serial.println("\n--- Entering Deep Sleep ---");
-  digitalWrite(SENSOR_PWR_PIN, LOW);
+  
+  // Power down LEDs
   setLED(false, false, false);
+  
+  // Ensure WiFi and BLE are truly off
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  
+  if (bleStarted) {
+    BLEDevice::deinit(true);
+    bleStarted = false;
+  }
   
   Serial.flush();
   delay(100); 
   
-  // Wake on PIR (High Level)
-  uint64_t wakeup_mask = (1ULL << PIR_PIN);
-  esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+  // Wake on Beam Break (Either Pin 2 or 3 goes LOW)
+  uint64_t wakeup_mask = (1ULL << ADC1_PIN) | (1ULL << ADC2_PIN);
+  esp_sleep_enable_ext1_wakeup(wakeup_mask, ESP_EXT1_WAKEUP_ANY_LOW);
   
   // Wake every 1 hour to publish batch (3600 seconds)
   esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL);
@@ -753,30 +841,27 @@ void goToSleep() {
 void setup()
 {
   Serial.begin(115200);
-  delay(100);
+  // Removed delay(100) for faster wakeup
 
-  // Initialize Sensor Power as early as possible
-  pinMode(SENSOR_PWR_PIN, OUTPUT);
-  digitalWrite(SENSOR_PWR_PIN, HIGH);
+  esp_reset_reason_t reset_reason = esp_reset_reason();
+  Serial.printf("\n[SYSTEM] Reset Reason: %d\n", reset_reason);
 
-  // Initialize PIR Pin
-  pinMode(PIR_PIN, INPUT); 
+  // Initialize Peripherals
   
-  // Log wakeup reason
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  Serial.printf("[SYSTEM] Wakeup Cause: %d\n", wakeup_reason);
   
   if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-    Serial.println("Wakeup Source: Timer (Hourly Batch Upload)");
+    Serial.println("\n[SYSTEM] Wakeup Source: TIMER (Hourly Batch Upload)");
     wokeFromSleep = true;
     hourlyPublishPending = true;
     networkingRequested = (eventCount > 0);
-  } else if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
-    Serial.println("Wakeup Source: PIR Motion");
-    wokeFromSleep = true;
-    hourlyPublishPending = false;
-    networkingRequested = false; // Don't connect on motion, just record
+  } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1 || wakeup_reason == ESP_SLEEP_WAKEUP_GPIO || (reset_reason == ESP_RST_DEEPSLEEP && wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED)) {
+    uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
+    Serial.printf("[SYSTEM] Wakeup Source: BEAM BREAK (Pins: 0x%llx)\n", wakeup_pin_mask);
+    runMonitoringMode(wakeup_pin_mask); 
   } else {
-    Serial.println("Wakeup Source: Cold Boot");
+    Serial.println("\n[SYSTEM] Wakeup Source: COLD BOOT");
     wokeFromSleep = false;
     hourlyPublishPending = false;
     networkingRequested = true; // Connect on first boot for status/OTA/time
@@ -785,8 +870,8 @@ void setup()
   lastActivityTime = millis();
 
   // If we have buffered events from a previous session, trigger networking
-  if (eventCount > 0) {
-    Serial.printf("Found %d buffered events in RTC memory. Triggering upload...\n", eventCount);
+  if (eventCount > 0 && wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
+    Serial.printf("Found %d buffered events. Triggering upload...\n", eventCount);
     networkingRequested = true;
   }
   
@@ -889,49 +974,7 @@ void loop()
   }
 
   // =====================================================
-  // 1. PIR STATE CHECK (PRIMARY POWER CONTROLLER)
-  // =====================================================
-  bool motionDetected = (digitalRead(PIR_PIN) == HIGH);
-  
-  if (!motionDetected && currentState == NORMAL_OPERATION) {
-    // If PIR is LOW, we only stay awake if we have an hourly publish pending
-    if (hourlyPublishPending && eventCount > 0) {
-      // Stay awake to process networking below
-    } else {
-      Serial.println("PIR LOW and no scheduled upload. Deep Sleep.");
-      goToSleep();
-      return;
-    }
-  }
-
-  // =====================================================
-  // 2. BEAM PROCESSING (Only while motion detected)
-  // =====================================================
-  if (motionDetected) {
-    beam1_active = (digitalRead(ADC1_PIN) == BEAM_CLEAR_LEVEL);
-    beam2_active = (digitalRead(ADC2_PIN) == BEAM_CLEAR_LEVEL);
-
-    if (beamChanged && currentState != CALIBRATION_MODE) {
-      beamChanged = false;
-      processFlow();
-      // publishTelemetry(); // Usually disabled to save power during detection
-    }
-    
-    // Safety Timeout for blocked beams
-    static unsigned long bothBlockedStartTime = 0;
-    if (!beam1_active && !beam2_active) {
-      if (bothBlockedStartTime == 0) bothBlockedStartTime = millis();
-      if (millis() - bothBlockedStartTime > 30000) {
-        Serial.println("Both beams blocked > 30s. Triggering safety Deep Sleep.");
-        goToSleep();
-      }
-    } else {
-      bothBlockedStartTime = 0;
-    }
-  }
-
-  // =====================================================
-  // 3. NETWORKING (Hourly or Cold Boot)
+  // NETWORKING (Hourly or Cold Boot)
   // =====================================================
   if (networkingRequested || hourlyPublishPending) {
     if (WiFi.status() != WL_CONNECTED && connectionRetries < 3) {
@@ -951,7 +994,7 @@ void loop()
           connectionRetries++;
           if (connectionRetries >= 3) {
             Serial.println("Batch upload failed. Retrying next hour.");
-            hourlyPublishPending = false; // Give up for this hour
+            hourlyPublishPending = false; 
             networkingRequested = false;
           }
         } else {
@@ -968,23 +1011,23 @@ void loop()
       } else {
         mqttClient.loop();
         publishBufferedEvents();
-        // Once buffered events are cleared, we are done with the hourly publish
+        // Once buffered events are cleared, we are done
         if (eventCount == 0) {
           Serial.println("Batch upload complete.");
           hourlyPublishPending = false;
           networkingRequested = false;
+          // Disconnect WiFi to save power before deep sleep
+          WiFi.disconnect(true);
+          WiFi.mode(WIFI_OFF);
         }
       }
     }
+  } else {
+    // No networking pending, go to sleep
+    goToSleep();
   }
 
   updateStatusLED();
-
-  // If PIR is LOW and we've finished our networking (or failed), go back to sleep
-  if (!motionDetected && !hourlyPublishPending && !networkingRequested) {
-    goToSleep();
-  }
-  
   delay(1); 
 }
 
@@ -992,15 +1035,26 @@ void loop()
 // DIRECTIONAL STATE MACHINE
 // =====================================================
 void processFlow() {
+  // Debounce removed for high-speed sensor spacing
+
   // Beams are active (TRUE) when clear, and inactive (FALSE) when blocked.
   bool b1 = !beam1_active; // b1 is true if blocked
   bool b2 = !beam2_active; // b2 is true if blocked
   
   static bool last_b1 = false;
   static bool last_b2 = false;
-  static unsigned long stateEntryTime = 0;
-  static int sequence = 0; // 0: None, 1: B1 hit first, 2: B2 hit first, 3: Both hit simultaneously
-  static bool bothHitFlag = false;
+  // sequence, bothHitFlag, stateEntryTime are now global
+
+  // Debug state changes and raw inputs
+  static DetectionState lastDetectionState = IDLE;
+  if (detectionState != lastDetectionState || (b1 != last_b1 || b2 != last_b2)) {
+    Serial.print("[STATE] "); Serial.print(lastDetectionState); 
+    Serial.print(" -> "); Serial.print(detectionState);
+    Serial.print(" | Beams: "); Serial.print(b1 ? "B" : "C"); Serial.print(b2 ? "B" : "C");
+    Serial.print(" | Seq: "); Serial.println(sequence);
+    Serial.flush();
+    lastDetectionState = detectionState;
+  }
 
   // Update stateEntryTime on any state change to prevent timeout while actively blocked
   if (b1 != last_b1 || b2 != last_b2) {
@@ -1015,17 +1069,14 @@ void processFlow() {
         if (b1 && !b2) {
           detectionState = B1_HIT;
           sequence = 1;
-          Serial.println("Sequence Start: B1");
         } else if (b2 && !b1) {
           detectionState = B2_HIT;
           sequence = 2;
-          Serial.println("Sequence Start: B2");
         } else {
           // Simultaneous hit
           detectionState = BOTH_HIT;
           sequence = 3;
           bothHitFlag = true;
-          Serial.println("Sequence Start: BOTH (Ambiguous)");
         }
       }
       break;
@@ -1063,17 +1114,11 @@ void processFlow() {
     case BOTH_HIT:
       if (!b1 && b2) {
         // B1 cleared first - moving towards B2 (OUT)
-        if (sequence == 3) {
-          sequence = 1; 
-          Serial.println("Ambiguity Resolved: OUT");
-        }
+        if (sequence == 3) sequence = 1; 
         detectionState = B2_HIT;
       } else if (b1 && !b2) {
         // B2 cleared first - moving towards B1 (IN)
-        if (sequence == 3) {
-          sequence = 2;
-          Serial.println("Ambiguity Resolved: IN");
-        }
+        if (sequence == 3) sequence = 2;
         detectionState = B1_HIT;
       } else if (!b1 && !b2) {
         // Both cleared at exact same time
